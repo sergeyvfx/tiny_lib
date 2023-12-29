@@ -16,6 +16,7 @@
 // Version history
 // ---------------
 //
+//   0.0.2-alpha    (29 Dec 2023)    Allow snprintf() to receive nullptr buffer.
 //   0.0.1-alpha    (28 Dec 2023)    First public release.
 
 #pragma once
@@ -29,7 +30,7 @@
 // Semantic version of the tl_string_portable library.
 #define TL_STRING_PORTABLE_VERSION_MAJOR 0
 #define TL_STRING_PORTABLE_VERSION_MINOR 0
-#define TL_STRING_PORTABLE_VERSION_REVISION 1
+#define TL_STRING_PORTABLE_VERSION_REVISION 2
 
 // Namespace of the module.
 // The outer name spaces which surrounds the ABI-version namespace.
@@ -85,14 +86,16 @@ inline void strncpy(char* dst, const char* src, const size_t dst_size) {
 // Return the number of characters that would have been printed if the buffer
 // size was unlimited, not including the null-terminator.
 //
+// The buffer can be set to nullptr and the buffer_size to zero. In this case
+// the function returns the number of characters needed in the buffer to fit the
+// requested format.
+//
 // The naming follows the standard C library naming.
 // NOLINTNEXTLINE(readability-identifier-naming)
 inline auto vsnprintf(char* buffer,
                       size_t buffer_size,
                       const char* format,
                       va_list arg) -> int {
-  assert(buffer != nullptr);
-  assert(buffer_size > 0);
   assert(format != nullptr);
 
   int num_printed = ::vsnprintf(buffer, buffer_size, format, arg);
@@ -108,10 +111,12 @@ inline auto vsnprintf(char* buffer,
   }
 #endif
 
-  if (num_printed != -1 && num_printed < buffer_size) {
-    buffer[num_printed] = '\0';
-  } else {
-    buffer[buffer_size - 1] = '\0';
+  if (buffer) {
+    if (num_printed != -1 && num_printed < buffer_size) {
+      buffer[num_printed] = '\0';
+    } else {
+      buffer[buffer_size - 1] = '\0';
+    }
   }
 
   return num_printed;

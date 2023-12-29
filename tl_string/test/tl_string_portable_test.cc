@@ -63,6 +63,9 @@ TEST(tl_string_portable, snprintf) {
     EXPECT_EQ(buffer[7], '\0');
     EXPECT_EQ(buffer[8], 0x7f);
   }
+
+  // Formatted print to a null string.
+  { EXPECT_EQ(snprintf(nullptr, 0, "%d%d%d%d%d", 12, 34, 56, 78, 90), 10); }
 }
 
 }  // namespace tiny_lib::string_portable
