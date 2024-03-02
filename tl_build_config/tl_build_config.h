@@ -15,7 +15,7 @@
 // symbols prefixed with `OS_` are defined to 0 (except of the aggregates
 // described above).
 //
-// The is an aggregates which allows to access "family" of the operating system:
+// There are aggregates which allows to access "family" of the operating system:
 //
 // - OS_BSD is defined for 1 for all BSD family of OS (FreeBSD, NextBSD, ...).
 // - OS_POSIX is defined to 1 if the OS implements POSIX API.
@@ -24,7 +24,7 @@
 // Compiler detection
 // ==================
 //
-// The following compilers are detected: CLANG, GCC, MSVS, MINGW32, MINGW64.
+// The following compilers are detected: CLANG, GCC, MSVC, MINGW32, MINGW64.
 //
 // The COMPILER_<family> for the detected compiler is defined to 1, and all the
 // rest of the compiler defines are set to 0.
@@ -45,7 +45,7 @@
 //
 // The commonly detected CPU capabilities are:
 // - Family: `ARCH_CPU_<FAMILY>_FAMILY`
-// - CPO bitness: `ARCH_CPU_<32|64>_BITS`
+// - CPU bitness: `ARCH_CPU_<32|64>_BITS`
 // - Endianess: `ARCH_CPU_<LITTLE|BIG>_ENDIAN`
 //
 // Supported CPU families: X86, S390, PPC, ARM, MIPS.
@@ -59,6 +59,7 @@
 // Version history
 // ===============
 //
+//   0.0.2-alpha    ( 2 Mar 2024)    Correct spelling in comments.
 //   0.0.1-alpha    (28 Dec 2023)    First public release.
 
 #pragma once
@@ -68,14 +69,9 @@
 //
 // NOTE: All commonly used symbols (which are checked on a "top" level, from
 // outside of any platform-specific ifdef block) are to be explicitly defined
-// to 0 when they are not "active". This is extra lines of code in this file,
-// but is not being edited that often. Such approach helps catching cases when
-// one attempted to access build configuration variable without including the
-// header by simply using -Wundef compiler attribute.
-//
-// NOTE: Not having things explicitly defined to 0 is harmless (in terms it
-// follows same rules as Google projects) and will simply cause compiler to
-// become more noisy, which is simple to correct.
+// to 0 when they are not "active". Such an approach helps catching cases when
+// one is attempted to access build configuration variable without including the
+// header by using the -Wundef compiler attribute.
 
 ////////////////////////////////////////////////////////////////////////////////
 // A set of macros to use for platform detection.
