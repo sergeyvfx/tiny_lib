@@ -20,7 +20,7 @@ set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 # C4389 - 'operator' : signed/unsigned mismatch.
 #
 #         TODO(sergey): Ideally should be solved, but would need to ensure
-#         this warnming happens in all compilers. But also might be rather
+#         this warming happens in all compilers. But also might be rather
 #         annoying in some places.
 #
 # C4244 - Conversion from 'type1' to 'type2', possible loss of data.

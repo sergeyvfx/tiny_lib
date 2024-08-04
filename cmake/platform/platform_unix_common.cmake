@@ -34,12 +34,6 @@ if(WITH_DEVELOPER_SANITIZER)
   add_compiler_flag(DEFAULT_C_FLAGS "${_sanitizer_flags}")
   add_compiler_flag(DEFAULT_CXX_FLAGS "${_sanitizer_flags}")
 
-  if(APPLE)
-    # Pass -fsanitize=address to the linker so that it links agains ASAN
-    # libraries avoiding linker error when using Xcode generator.
-    add_compiler_flag(DEFAULT_LINKER_FLAGS "${_sanitizer_flags}")
-  endif()
-
   unset(_sanitizer_flags)
 endif()
 

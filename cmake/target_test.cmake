@@ -74,17 +74,17 @@ endfunction()
 # Define unit test target which tests both default configuration and the
 # configuration with exceptions disabled.
 #
-# The target is specified by the name of a test (without "_test" suffic) and the
+# The target is specified by the name of a test (without "_test" suffix) and the
 # file name it is compiled from. The "_test" for the target suffix will be added
 # automatically.
-# For the test without the exceptions th esuffix is "_noexc_test".
+# For the test without the exceptions th suffix is "_noexc_test".
 #
 # Extra definitions and compiler options are controlled via the DEFINITIONS
 # and COMPILE_OPTIONS flags.
 #
 # It is possible to pass additional linking libraries by specifying "LIBRARIES"
 # argument (the target will be linked against all libraries listed after the
-# "LIBRRAIES" keyword).
+# "LIBRARIES" keyword).
 #
 # It is possible to specify runtime command line arguments passed to the test
 # executable by using "ARGUMENTS" argument and passing all desired command line
@@ -97,5 +97,5 @@ function(tl_test TEST_NAME FILENAME)
   tl_single_test(${TEST_NAME} ${FILENAME} ${ARGN})
 
   tl_single_test(${TEST_NAME}_noexc ${FILENAME} ${ARGN})
-  disable_target_excceptions(tl_${TEST_NAME}_noexc_test COMPILE_OPTIONS)
+  disable_target_exceptions(tl_${TEST_NAME}_noexc_test COMPILE_OPTIONS)
 endfunction()

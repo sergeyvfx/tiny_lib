@@ -26,7 +26,7 @@ This module defines the following variables:
 ``ClangTidy_VERSION_MAJOR``
   A major part of the clang-tidy version.
 
-``ClangTidy_VERSION_MINTO``
+``ClangTidy_VERSION_MINOR``
   A minor part of the clang-tidy version.
 
 `ClangTidy_VERSION_PATCH``
@@ -89,7 +89,7 @@ if(ClangTidy_EXECUTABLE)
     # Unset temp variables.
     unset(_num_clang_tidy_version_parts)
     unset(_clang_tidy_semantic_version)
-    unset(_clang_tidy_version_partss)
+    unset(_clang_tidy_version_parts)
   else()
     # Make sure unknown nature of clang-tidy is recorded.
     set(_clang_tidy_version_string "UNKNOWN")

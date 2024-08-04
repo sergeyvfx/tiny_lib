@@ -164,7 +164,7 @@ endmacro()
 function(remove_file_strict_compiler_flags FILE)
   get_source_file_property(_file_cflags "${FILE}" COMPILE_FLAGS)
   if(NOT _file_cflags)
-    # Avoid UNKNOWN valie when the file does not have any flags configured yet.
+    # Avoid UNKNOWN value when the file does not have any flags configured yet.
     set(_file_cflags)
   endif()
   remove_compiler_flags(_file_cflags ${REMOVE_CC_STRICT_FLAGS})
@@ -186,7 +186,7 @@ endfunction()
 ################################################################################
 # Disable exceptions handling for the specified target.
 
-function(disable_target_excceptions TARGET)
+function(disable_target_exceptions TARGET)
   if (MSVC)
     # TODO: Needs implementation
     # target_compile_options(tl_${TEST_NAME}_noexc_test PRIVATE /EHsc-)
