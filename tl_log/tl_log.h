@@ -67,6 +67,8 @@
 // Version history
 // ===============
 //
+//   0.0.2-alpha    (10 Aug 2024)    Fix infinite recursion in stream logger
+//                                   when allocated work buffer is empty.
 //   0.0.1-alpha    (28 Dec 2023)    First public release.
 
 #pragma once
@@ -81,7 +83,7 @@
 // Semantic version of the tl_log library.
 #define TL_LOG_VERSION_MAJOR 0
 #define TL_LOG_VERSION_MINOR 0
-#define TL_LOG_VERSION_REVISION 1
+#define TL_LOG_VERSION_REVISION 2
 
 // Namespace of the module.
 // The outer name spaces which surrounds the ABI-version namespace.
@@ -339,6 +341,13 @@ class StreamBuffer : public std::streambuf {
   }
 
   inline auto overflow(const int ch) -> int override {
+    if (buffer_size_ == 0) {
+      // Silently consume the character.
+      // The buffer was explicitly allocated to 0 size, likely for the
+      // performance reasons to disable logging completely.
+      return traits_type::to_int_type(ch);
+    }
+
     has_overflow_ = true;
 
     // Write the current buffer to the output.

@@ -95,8 +95,8 @@ class LogTest : public ::testing::Test {
 TEST_F(LogTest, NonConfigured) {
   Message(Severity::kInfo).GetStream() << "Hello, World!";
 
-  EXPECT_DEATH({ FatalMessage().GetStream() << "Fatal error!"; },
-               "Fatal error!\n");
+  EXPECT_DEATH(
+      { FatalMessage().GetStream() << "Fatal error!"; }, "Fatal error!\n");
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -145,11 +145,70 @@ TEST_F(LogStreamTest, Fatal) {
   StreamFunctions functions;
   Context::Get().SetFunctions(functions);
 
-  EXPECT_DEATH({ Message(Severity::kFatal).GetStream() << "Fatal error!"; },
-               "Fatal error!\n");
+  EXPECT_DEATH(
+      { Message(Severity::kFatal).GetStream() << "Fatal error!"; },
+      "Fatal error!\n");
 
-  EXPECT_DEATH({ FatalMessage().GetStream() << "Fatal error!"; },
-               "Fatal error!\n");
+  EXPECT_DEATH(
+      { FatalMessage().GetStream() << "Fatal error!"; }, "Fatal error!\n");
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Logging to a null sync.
+
+class NullFunctions : public Functions {
+ public:
+  void Write(const Severity /*severity*/,
+             const char* /*message*/,
+             const size_t /*length*/) override {}
+  void Flush(Severity /*severity*/) override {}
+
+  [[noreturn]] void Fail() override { abort(); }
+
+  auto AllocatePrintBuffer(size_t& buffer_size) -> char* override {
+    buffer_size = 0;
+    return nullptr;
+  }
+
+  void FreePrintBuffer(char* /*buffer*/,
+                       const size_t /*buffer_size*/) override {}
+};
+
+class LogNullTest : public LogTest {
+ protected:
+  void SetUp() override { Context::Get().SetFunctions(functions_); }
+
+ private:
+  NullFunctions functions_;
+};
+
+TEST_F(LogNullTest, Stream) {
+  Message(Severity::kInfo).GetStream() << "Logging::Basic test";
+  Message(Severity::kInfo).GetStream() << "Hello, World";
+}
+
+TEST_F(LogNullTest, StreamFatal) {
+  EXPECT_DEATH(
+      { Message(Severity::kFatal).GetStream() << "Fatal error!"; }, "");
+
+  EXPECT_DEATH({ FatalMessage().GetStream() << "Fatal error!"; }, "");
+}
+
+TEST_F(LogNullTest, Formatted) {
+  LogFormatted(Severity::kInfo, "Hello, %s!\n", "World");
+}
+
+TEST_F(LogNullTest, FormattedFatal) {
+  EXPECT_DEATH(
+      { LogFormatted(Severity::kFatal, "Hello, %s!\n", "World"); }, "");
+}
+
+TEST_F(LogNullTest, Unformatted) {
+  LogUnformatted(Severity::kInfo, "Hello, World!\n");
+}
+
+TEST_F(LogNullTest, UnformattedFatal) {
+  EXPECT_DEATH({ LogUnformatted(Severity::kFatal, "Hello, World!\n"); }, "");
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -197,8 +256,9 @@ TEST_F(LogFormattedTest, Fatal) {
   StreamFunctions functions;
   Context::Get().SetFunctions(functions);
 
-  EXPECT_DEATH({ LogFormatted(Severity::kFatal, "Fatal %s!", "error"); },
-               "Fatal error!\n");
+  EXPECT_DEATH(
+      { LogFormatted(Severity::kFatal, "Fatal %s!", "error"); },
+      "Fatal error!\n");
 
   EXPECT_DEATH({ FatalFormatted("Fatal %s!", "error"); }, "Fatal error!\n");
 }
@@ -232,8 +292,8 @@ TEST_F(LogUnformattedTest, Fatal) {
   StreamFunctions functions;
   Context::Get().SetFunctions(functions);
 
-  EXPECT_DEATH({ LogUnformatted(Severity::kFatal, "Fatal error!"); },
-               "Fatal error!\n");
+  EXPECT_DEATH(
+      { LogUnformatted(Severity::kFatal, "Fatal error!"); }, "Fatal error!\n");
 
   EXPECT_DEATH({ FatalUnformatted("Fatal error!"); }, "Fatal error!\n");
 }
