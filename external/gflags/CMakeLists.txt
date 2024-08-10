@@ -51,7 +51,7 @@ set(GFLAGS_FOUND True PARENT_SCOPE)
 set(GFLAGS_LIBRARIES external_gflags PARENT_SCOPE)
 set(GFLAGS_INCLUDE_DIRS ${CMAKE_CURRENT_LIST_DIR}/gflags/src PARENT_SCOPE)
 
-# Create imported library for the gflags, making it eaiser to link against.
+# Create imported library for the gflags, making it easier to link against.
 if(NOT TARGET gflags::gflags)
   add_library(gflags::gflags INTERFACE IMPORTED GLOBAL)
   set_target_properties(gflags::gflags PROPERTIES

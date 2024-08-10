@@ -56,7 +56,7 @@ set(GTEST_LIBRARIES external_googletest PARENT_SCOPE)
 set(GTEST_INCLUDE_DIRS
     ${CMAKE_CURRENT_LIST_DIR}/googletest/googletest/include PARENT_SCOPE)
 
-# Create imported library for the gtest, making it eaiser to link against.
+# Create imported library for the gtest, making it easier to link against.
 if(NOT TARGET GTest::gtest)
   add_library(GTest::gtest INTERFACE IMPORTED GLOBAL)
   set_target_properties(GTest::gtest PROPERTIES

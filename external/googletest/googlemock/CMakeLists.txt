@@ -42,7 +42,7 @@ set(GMOCK_LIBRARIES external_googlemock PARENT_SCOPE)
 set(GMOCK_INCLUDE_DIRS
     ${CMAKE_CURRENT_LIST_DIR}/googletest/googlemock/include PARENT_SCOPE)
 
-# Create imported library for the gmock, making it eaiser to link against.
+# Create imported library for the gmock, making it easier to link against.
 if(NOT TARGET GTest::gmock)
   add_library(GTest::gmock INTERFACE IMPORTED GLOBAL)
   set_target_properties(GTest::gmock PROPERTIES
