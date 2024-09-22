@@ -67,6 +67,9 @@
 // Version history
 // ===============
 //
+//   0.0.3-alpha    (22 Sep 2024)    Added format printf attribute to the log
+//                                   function that implements printf() style of
+//                                   formatting.
 //   0.0.2-alpha    (10 Aug 2024)    Fix infinite recursion in stream logger
 //                                   when allocated work buffer is empty.
 //   0.0.1-alpha    (28 Dec 2023)    First public release.
@@ -130,6 +133,24 @@
 // even if the code is properly structured.
 #if !defined(TL_LOG_UNREACHABLE_ABORT)
 #  define TL_LOG_UNREACHABLE_ABORT() abort()
+#endif
+
+// A portable specification of printf attribute, which is supported for GCC and
+// Clang, but not for MSVC.
+//
+// The fmt_arg specifies 1-based index of a function attribute which specifies
+// printf-style format.
+// The vargs_arg specifies the 1-based index of the variadic argument which is
+// used by the format interpreter.
+// Note that implicit `this` argument has index 1.
+//
+// Example:
+//   TL_LOG_FORMAT_ATTRIBUTE(1, 2) void MyPrint(char* fmt, ...)
+#if defined(__GNUC__) || defined(__clang__)
+#  define TL_LOG_FORMAT_ATTRIBUTE(fmt_arg, vargs_arg)                          \
+    __attribute__((format(printf, fmt_arg, vargs_arg)))
+#else
+#  define TL_LOG_FORMAT_ATTRIBUTE(fmt_arg, vargs_arg)
 #endif
 
 // NOLINTNEXTLINE(modernize-concat-nested-namespaces)
@@ -575,6 +596,7 @@ class FatalMessage : public Message {
 //
 // If the severity is Severity::kFatal then the message is logged, flushed, and
 // execution is terminated via the Fail() function callback.
+TL_LOG_FORMAT_ATTRIBUTE(2, 3)
 inline void LogFormatted(const Severity severity, const char* format, ...) {
   std::va_list args;
   va_start(args, format);
@@ -612,7 +634,8 @@ inline void LogUnformatted(const Severity severity, const char* message) {
 //
 // Functionally it is the same as LogFormatted(Severity::kFatal, format, ...)
 // but has a [[noreturn]] attribute.
-[[noreturn]] inline void FatalFormatted(const char* format, ...) {
+[[noreturn]] TL_LOG_FORMAT_ATTRIBUTE(1, 2) inline void FatalFormatted(
+    const char* format, ...) {
   std::va_list args;
   va_start(args, format);
   internal::FormatAndLogArgumentList(Severity::kFatal, format, args);
@@ -651,3 +674,4 @@ inline void LogUnformatted(const Severity severity, const char* message) {
 
 #undef TL_LOG_NO_DEFAULT_IMPLEMENTATION
 #undef TL_LOG_UNREACHABLE_ABORT
+#undef TL_LOG_FORMAT_ATTRIBUTE
