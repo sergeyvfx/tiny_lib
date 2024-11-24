@@ -16,6 +16,8 @@
 // Version history
 // ---------------
 //
+//   0.0.3-alpha    (24 Nov 2024)    Return the number of characters copied from
+//                                   the strncpy().
 //   0.0.2-alpha    (29 Dec 2023)    Allow snprintf() to receive nullptr buffer.
 //   0.0.1-alpha    (28 Dec 2023)    First public release.
 
@@ -68,16 +70,25 @@ inline namespace TL_STRING_PORTABLE_VERSION_NAMESPACE {
 // `dst_size` will be written to the `dst` (including the null-terminator).
 //
 // The naming follows the standard C library naming.
+//
+// Returns the number of characters written to the destination, excluding the
+// null-terminator.
+//
+// NOTE: The source and destination must not alias.
+//
 // NOLINTNEXTLINE(readability-identifier-naming)
-inline void strncpy(char* dst, const char* src, const size_t dst_size) {
+inline auto strncpy(char* dst, const char* src, const size_t dst_size)
+    -> size_t {
   if (dst_size == 0) {
-    return;
+    return 0;
   }
 
   const size_t src_len = ::strlen(src);
   const size_t len_to_copy = std::min(src_len, dst_size - 1);
   ::memcpy(dst, src, len_to_copy);
   dst[len_to_copy] = '\0';
+
+  return len_to_copy;
 }
 
 // Portable version of `::vsnprintf()` which ensures the result is always
