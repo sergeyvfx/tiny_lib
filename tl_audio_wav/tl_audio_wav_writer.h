@@ -42,6 +42,21 @@
 //
 //   wav_writer.Close();
 //
+//   // Streamed buffered writer.
+//
+//   const FormatSpec format_spec = {
+//       .num_channels = 2,
+//       .sample_rate = 44100,
+//       .bit_depth = 16,
+//   };
+//
+//   MyFileWriter my_file_writer;
+//   Writer<MyFileWriter> wav_writer;
+//
+//   wav_writer.Open(my_file_writer, format_spec);
+//   wav_writer.WriteMultipleSamples(samples_buffer);
+//   wav_writer.Close();
+//
 //   // Bulked writer.
 //
 //   const FormatSpec format_spec = {
@@ -94,7 +109,7 @@
 // Limitations
 // ===========
 //
-// - Only writing WAVE as uncompressed PCM 16 bit signed integer data type is
+// - Only writing WAVE as uncompressed PCM 16-bit signed integer data type is
 //   supported.
 //
 // - Streaming is not optimized: it can take substantial time to write float
@@ -104,10 +119,22 @@
 // Version history
 // ===============
 //
+//   0.0.2-alpha    (13 Dec 2024)    Various improvements with the goal to
+//                                   support buffered writing:
+//                                   - Implement buffered writing.
+//                                   - Added WriteMultipleSamples().
+//                                   - Fix incorrect check for the number of
+//                                     written bytes.
+//                                   - Added access to file specification:
+//                                     writer.GetFileSpec().
+//                                   - [[nodiscard]] is used for internal
+//                                     functions.
 //   0.0.1-alpha    (28 Dec 2023)    First public release.
 
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <bit>
 #include <cassert>
 #include <cstdint>
@@ -124,6 +151,32 @@
 // The outer name spaces which surrounds the ABI-version namespace.
 #ifndef TL_AUDIO_WAV_WRITER_NAMESPACE
 #  define TL_AUDIO_WAV_WRITER_NAMESPACE tiny_lib::audio_wav_writer
+#endif
+
+// The size of the buffer used for single frame-sample.
+//
+// It is used, for example, in WriteSingleSample() to optimize disk and memory
+// access pattern. Measured in the number of per-channel samples. The default
+// value covers the case of surround files with center channel.
+//
+// Must be non-negative.
+// Value of 0 or 1 disables buffered writing, which leads to more poor
+// performance but uses less stack memory.
+#ifndef TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE
+#  define TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE 5
+#endif
+
+// The size of the buffer used for storing multiple frame-samples.
+//
+// It is used, for example, in WriteMultipleSamples() to optimize disk and
+// memory access pattern. Measured in the number of per-channel samples.
+//
+// Must be non-negative.
+// Value of 0 or 1 disables buffered writing, which leads to more poor
+// performance but uses less stack memory.
+#ifndef TL_AUDIO_WAV_WRITER_BUFFER_SIZE
+#  define TL_AUDIO_WAV_WRITER_BUFFER_SIZE                                      \
+    (TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE * 32)
 #endif
 
 // Helpers for TL_AUDIO_WAV_WRITER_VERSION_NAMESPACE.
@@ -162,7 +215,7 @@ struct FormatSpec {
   int sample_rate{-1};
 
   // Bit depth for per-channel sample values.
-  // For example: 16 means values are stored as 16 bit signed integers.
+  // For example: 16 means values are stored as 16-bit signed integers.
   int bit_depth{-1};
 };
 
@@ -205,6 +258,12 @@ class Writer {
   // Returns true upon success.
   auto Open(FileWriter& file_writer, const FormatSpec& format_spec) -> bool;
 
+  // Get format specification of the file.
+  //
+  // Requires WAV file to be successfully open for write first and will have an
+  // undefined behavior if the Open() returned false.
+  inline auto GetFormatSpec() const -> const FormatSpec&;
+
   // Write single sample which consists of values for all channels.
   //
   // The number of values must match the number of channels in the format
@@ -213,6 +272,22 @@ class Writer {
   // Returns true upon successful write.
   template <class ValueType>
   auto WriteSingleSample(std::span<const ValueType> sample) -> bool;
+
+  // Write multiple samples to the file.
+  //
+  // The samples are provided as a flattened memory of audio frame samples:
+  //  {
+  //    sample 1 ch 1, sample 1 ch 2  ...  sample 1 ch N,
+  //    sample 2 ch 1, sample 2 ch 2  ...  sample 2 ch N,
+  //    ...
+  //    sample M ch 1, sample M ch 2  ...  sample M ch N,
+  //  }
+  //
+  // The number of channels in every ampel must match the number of channels in
+  // the format specification, and the number of frames should be integer.
+  // Otherwise an error is returned.
+  template <class ValueType>
+  auto WriteMultipleSamples(std::span<const ValueType> samples) -> bool;
 
   // Close the file writer by writing the final header.
   //
@@ -233,10 +308,10 @@ class Writer {
   // format.
   //
   // Returns true if the file is fully written.
-  template <class FileWriterType, class SamplesType>
+  template <class FileWriterType, class ValueType>
   static auto Write(FileWriterType&& file_writer,
                     const FormatSpec& format_spec,
-                    const SamplesType& samples) -> bool;
+                    std::span<const ValueType> samples) -> bool;
 
  private:
   // Write placeholder header upon the file Open().
@@ -244,27 +319,38 @@ class Writer {
   // Will write all the known information from the current format specification,
   // but will keep the chunk sizes at a high value allowing to read partially
   // saved file.
-  auto WritePlaceholderHeader() -> bool;
+  [[nodiscard]] auto WritePlaceholderHeader() -> bool;
 
   // Write the final header.
   //
   // Is supposed to be called after rewinding the file writer back to the
   // beginning.
-  auto WriteFinalHeader() -> bool;
+  [[nodiscard]] auto WriteFinalHeader() -> bool;
 
   // Internal implementation of the public WriteSingleSample().
   //
   // Uses a value type used for storage as a template argument.
   template <class ValueTypeInFile, class ValueTypeInBuffer>
-  auto WriteSingleSample(std::span<const ValueTypeInBuffer> sample) -> bool;
+  [[nodiscard]] auto WriteSingleSample(
+      std::span<const ValueTypeInBuffer> sample) -> bool;
+
+  // Internal implementation of the public WriteMultipleSamples().
+  //
+  // Uses a value type used for storage as a template argument.
+  template <class ValueTypeInFile, class ValueTypeInBuffer>
+  [[nodiscard]] auto WriteMultipleSamples(
+      std::span<const ValueTypeInBuffer> samples) -> bool;
 
   // Internal implementation of the public Write().
   //
   // Uses a value type stored in the file as a templated argument.
-  template <class ValueTypeInFile, class FileWriterType, class SamplesType>
-  static auto Write(FileWriterType&& file_writer,
-                    const FormatSpec& format_spec,
-                    const SamplesType& samples) -> bool;
+  template <class ValueTypeInFile,
+            class FileWriterType,
+            class ValueTypeInBuffer>
+  [[nodiscard]] static auto Write(FileWriterType&& file_writer,
+                                  const FormatSpec& format_spec,
+                                  std::span<const ValueTypeInBuffer> samples)
+      -> bool;
 
   FileWriter* file_writer_{nullptr};
 
@@ -275,6 +361,16 @@ class Writer {
 
   uint32_t num_samples_written_ = 0;
 };
+
+#if defined(_MSC_VER)
+#  pragma warning(push)
+// 4702 - Unreachable code.
+//        MSVC might consider some fall-back code paths consider unreachable.
+//        For example, assert() and default return value as a recovery.
+//        Another example, is having unbuffered code after `if constexpr ()`
+//        which evaluates to true for the buffered reading.
+#  pragma warning(disable : 4702)
+#endif
 
 ////////////////////////////////////////////////////////////////////////////////
 // WAV data types declaration.
@@ -301,7 +397,7 @@ namespace internal {
 // file.
 //
 // The FMT chunk contains channels and sampling specification (number of
-// channels, sample rate, etc).
+// channels, sample rate, etc.).
 //
 // The DATA chunk contains samples.
 //
@@ -328,7 +424,7 @@ constexpr auto IDStringToUInt32(const char a,
 
 // Mnemonics for known and supported chunk identifiers.
 //
-// Derived from the ASCII string representation stored as 32 bit integer.
+// Derived from the ASCII string representation stored as 32-bit integer.
 //
 // The value of ID matches the value when it is read from a binary file as
 // uint32 without endian conversion.
@@ -379,7 +475,7 @@ struct FormatData {
   // Rather self-explanatory: 1 is mono, 2 is stereo, 5 is surround.
   uint16_t num_channels;
 
-  // Sample rate in sampels per second.
+  // Sample rate in samples per second.
   uint32_t sample_rate;
 
   // sample_rate * num_channels * bit_depth/8
@@ -387,7 +483,7 @@ struct FormatData {
   // num_channels * bit_depth/8
   uint16_t block_align;
 
-  // Bits per sample of a single channel: 16 means samples are stored as 16 bit
+  // Bits per sample of a single channel: 16 means samples are stored as 16-bit
   // integers.
   uint16_t bit_depth;
 };
@@ -432,11 +528,28 @@ auto Writer<FileWriter>::Open(FileWriter& file_writer,
 }
 
 template <class FileWriter>
+inline auto Writer<FileWriter>::GetFormatSpec() const -> const FormatSpec& {
+  assert(is_open_);
+
+  return format_spec_;
+}
+
+template <class FileWriter>
 template <class ValueType>
 auto Writer<FileWriter>::WriteSingleSample(
     const std::span<const ValueType> sample) -> bool {
   switch (format_spec_.bit_depth) {
     case 16: return WriteSingleSample<int16_t, ValueType>(sample);
+  }
+  return false;
+}
+
+template <class FileWriter>
+template <class ValueType>
+auto Writer<FileWriter>::WriteMultipleSamples(
+    const std::span<const ValueType> samples) -> bool {
+  switch (format_spec_.bit_depth) {
+    case 16: return WriteMultipleSamples<int16_t, ValueType>(samples);
   }
   return false;
 }
@@ -460,10 +573,11 @@ auto Writer<FileWriter>::Close() -> bool {
 }
 
 template <class FileWriter>
-template <class FileWriterType, class SamplesType>
+template <class FileWriterType, class ValueType>
 auto Writer<FileWriter>::Write(FileWriterType&& file_writer,
                                const FormatSpec& format_spec,
-                               const SamplesType& samples) -> bool {
+                               const std::span<const ValueType> samples)
+    -> bool {
   switch (format_spec.bit_depth) {
     case 16: return Write<int16_t>(file_writer, format_spec, samples);
   }
@@ -480,7 +594,7 @@ inline auto Byteswap(T value) -> T;
 
 // Swap endianess of 16 bit unsigned int value.
 template <>
-inline auto Byteswap(const uint16_t value) -> uint16_t {
+[[nodiscard]] inline auto Byteswap(const uint16_t value) -> uint16_t {
 #if defined(__GNUC__)
   return __builtin_bswap16(value);
 #elif defined(_MSC_VER)
@@ -493,7 +607,7 @@ inline auto Byteswap(const uint16_t value) -> uint16_t {
 
 // Swap endianess of 32 bit unsigned int value.
 template <>
-inline auto Byteswap(const uint32_t value) -> uint32_t {
+[[nodiscard]] inline auto Byteswap(const uint32_t value) -> uint32_t {
 #if defined(__GNUC__)
   return __builtin_bswap32(value);
 #elif defined(_MSC_VER)
@@ -506,7 +620,7 @@ inline auto Byteswap(const uint32_t value) -> uint32_t {
 }
 
 template <class T>
-inline auto Byteswap(const T value) -> T {
+[[nodiscard]] inline auto Byteswap(const T value) -> T {
   static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4);
 
   if constexpr (sizeof(T) == 1) {
@@ -522,13 +636,17 @@ inline auto Byteswap(const T value) -> T {
     uint32_t result = Byteswap(*reinterpret_cast<const uint32_t*>(&value));
     return *reinterpret_cast<T*>(&result);
   }
+
+  assert(!"Unhandled type for Byteswap");
+
+  return {};
 }
 
 // Calculate size which is to be specified in the RIFF/RIFX chunk header.
 // This size is the size of the entire WAV file minus the header of the
 // RIFF/RIFX chunk header.
-inline auto CalculateRIFFContainerSize(const uint32_t num_data_bytes)
-    -> uint32_t {
+[[nodiscard]] inline auto CalculateRIFFContainerSize(
+    const uint32_t num_data_bytes) -> uint32_t {
   return
       // Data of the RIFF/RIFX chunk.
       sizeof(RIFFData) +
@@ -538,7 +656,7 @@ inline auto CalculateRIFFContainerSize(const uint32_t num_data_bytes)
       sizeof(ChunkHeader) + num_data_bytes;
 }
 
-inline auto FormatSpecToFormatData(const FormatSpec& format_spec)
+[[nodiscard]] inline auto FormatSpecToFormatData(const FormatSpec& format_spec)
     -> FormatData {
   FormatData format_data;
 
@@ -557,8 +675,8 @@ inline auto FormatSpecToFormatData(const FormatSpec& format_spec)
 }
 
 template <class FileWriter, class T>
-inline auto WriteObjectToFile(FileWriter& file_writer, const T& object)
-    -> bool {
+[[nodiscard]] inline auto WriteObjectToFile(FileWriter& file_writer,
+                                            const T& object) -> bool {
   const void* object_ptr = static_cast<const void*>(&object);
   constexpr size_t kObjectSize = sizeof(T);
 
@@ -569,18 +687,18 @@ inline auto WriteObjectToFile(FileWriter& file_writer, const T& object)
 //
 // Writes all sections of header up to and including the DATA chunk header.
 template <class FileWriter>
-inline auto WriteHeader(FileWriter& file_writer,
-                        const FormatSpec& format_spec,
-                        const uint32_t num_samples) -> bool {
+[[nodiscard]] inline auto WriteHeader(FileWriter& file_writer,
+                                      const FormatSpec& format_spec,
+                                      const uint32_t num_samples) -> bool {
   const uint32_t byte_depth = format_spec.bit_depth / 8;
   const uint32_t num_data_bytes =
       num_samples * byte_depth * format_spec.num_channels;
 
   // RIFF header and data.
 
-  const ChunkID riff_id = (std::endian::native == std::endian::little)
-                              ? ChunkID::kRIFF
-                              : ChunkID::kRIFX;
+  constexpr ChunkID riff_id = (std::endian::native == std::endian::little)
+                                  ? ChunkID::kRIFF
+                                  : ChunkID::kRIFX;
 
   const uint32_t riff_container_size =
       CalculateRIFFContainerSize(num_data_bytes);
@@ -622,7 +740,7 @@ template <class FromType, class ToType>
 auto ConvertValue(FromType sample) -> ToType;
 
 template <>
-auto ConvertValue(const float sample) -> int16_t {
+[[nodiscard]] inline auto ConvertValue(const float sample) -> int16_t {
   // There does not seem to be the standard and different implementations are
   // using different quantization rules.
   //
@@ -645,33 +763,25 @@ auto ConvertValue(const float sample) -> int16_t {
 }
 
 template <>
-auto ConvertValue(const int16_t sample) -> int16_t {
+[[nodiscard]] inline auto ConvertValue(const int16_t sample) -> int16_t {
   return sample;
 }
 
-// Write single sample.
+// Write single sample without using any buffering.
 //
-// The sample is expected to have number of values matching the number of
-// channels.
-template <class ValueTypeInFile, class FileWriter, class SampleType>
-inline auto WriteSample(FileWriter& file_writer,
-                        const FormatSpec& format_spec,
-                        const SampleType& sample) -> bool {
-  // Check for every sample as depending on data structure in the user code it
-  // might be not guaranteed that all samples contains the same number of
-  // channels.
-  const size_t num_values = std::size(sample);
-  if (num_values != format_spec.num_channels) {
-    return false;
-  }
-
+// Writes the entire sample, without performing any checks about validity.
+//
+// Returns true on success, false otherwise.
+template <class ValueTypeInFile, class FileWriter, class ValueTypeInBuffer>
+[[nodiscard]] inline auto WriteSingleSampleUnbuffered(
+    FileWriter& file_writer, const std::span<const ValueTypeInBuffer> sample)
+    -> bool {
   for (auto value_in_buffer : sample) {
-    using ValueTypeInBuffer = decltype(value_in_buffer);
-
     const ValueTypeInFile value_in_file =
         ConvertValue<ValueTypeInBuffer, ValueTypeInFile>(value_in_buffer);
 
-    if (!file_writer.Write(&value_in_file, sizeof(ValueTypeInFile))) {
+    if (file_writer.Write(&value_in_file, sizeof(ValueTypeInFile)) !=
+        sizeof(ValueTypeInFile)) {
       return false;
     }
   }
@@ -679,10 +789,197 @@ inline auto WriteSample(FileWriter& file_writer,
   return true;
 }
 
+// Write single sample using buffer to optimize disk and memory access.
+//
+// Writes the entire sample, without performing any checks about validity.
+//
+// Returns true on success, false otherwise.
+template <class ValueTypeInFile, class FileWriter, class ValueTypeInBuffer>
+[[nodiscard]] inline auto WriteSingleSampleBuffered(
+    FileWriter& file_writer, const std::span<const ValueTypeInBuffer> sample)
+    -> bool {
+  static_assert(TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE >= 0);
+
+  // This is more of provisionary check, to avoid possible warnings about zero
+  // sized buffer.
+  if constexpr (TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE > 1) {
+    const size_t num_channels_to_write = sample.size();
+    size_t num_channels_written = 0;
+
+    std::array<ValueTypeInFile, TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE>
+        buffer;
+
+    if (num_channels_to_write <= TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE) {
+      // An optimized version with less branching for cases when the
+      // frame-sample fits into the buffer.
+
+      const size_t num_bytes_to_write =
+          num_channels_to_write * sizeof(ValueTypeInFile);
+
+      // Convert type from how it's stored in the file to the return sample
+      // type.
+      for (size_t i = 0; i < num_channels_to_write; ++i) {
+        buffer[i] = ConvertValue<ValueTypeInBuffer, ValueTypeInFile>(
+            sample[num_channels_written++]);
+      }
+
+      // Write channels.
+      if (file_writer.Write(buffer.data(), num_bytes_to_write) !=
+          num_bytes_to_write) {
+        return false;
+      }
+
+      return true;
+    }
+
+    // A non-optimized version which handles an arbitrary number of channels.
+
+    while (num_channels_written != num_channels_to_write) {
+      const size_t n =
+          std::min(size_t(TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE),
+                   num_channels_to_write - num_channels_written);
+      const size_t num_bytes_to_write = n * sizeof(ValueTypeInFile);
+
+      // Convert type from how it's stored in the file to the return sample
+      // type.
+      for (size_t i = 0; i < n; ++i) {
+        buffer[i] = ConvertValue<ValueTypeInBuffer, ValueTypeInFile>(
+            sample[num_channels_written++]);
+      }
+      // Write channels.
+      if (file_writer.Write(buffer.data(), num_bytes_to_write) !=
+          num_bytes_to_write) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+// Write single sample. Will choose the best strategy to use based on the
+// current configuration.
+//
+// Writes the entire sample, without performing any checks about validity.
+//
+// Returns true on success, false otherwise.
+template <class ValueTypeInFile, class FileWriter, class ValueTypeInBuffer>
+[[nodiscard]] inline auto WriteSingleSample(
+    FileWriter& file_writer, const std::span<const ValueTypeInBuffer> sample)
+    -> bool {
+  static_assert(TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE >= 0);
+
+  if constexpr (TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE > 1) {
+    return WriteSingleSampleBuffered<ValueTypeInFile>(file_writer, sample);
+  }
+
+  return WriteSingleSampleUnbuffered<ValueTypeInFile>(file_writer, sample);
+}
+
+// Write multiple samples without using any buffering.
+//
+// Writes the entire samples buffer, without performing any checks about
+// validity.
+//
+// Returns true on success, false otherwise.
+template <class ValueTypeInFile, class FileWriter, class ValueTypeInBuffer>
+[[nodiscard]] inline auto WriteMultipleSamplesUnbuffered(
+    FileWriter& file_writer,
+    const size_t num_frames,
+    const size_t num_channels,
+    const std::span<const ValueTypeInBuffer> samples) -> bool {
+  const ValueTypeInBuffer* current_frame_data = samples.data();
+  for (size_t frame = 0; frame < num_frames; ++frame) {
+    if (!WriteSingleSample<ValueTypeInFile>(
+            file_writer, std::span(current_frame_data, num_channels))) {
+      return false;
+    }
+    current_frame_data += num_channels;
+  }
+  return true;
+}
+
+// Write multiple samples using buffer to optimize disk and memory access.
+//
+// Writes the entire samples buffer, without performing any checks about
+// validity.
+//
+// Returns true on success, false otherwise.
+template <class ValueTypeInFile, class FileWriter, class ValueTypeInBuffer>
+[[nodiscard]] inline auto WriteMultipleSamplesBuffered(
+    FileWriter& file_writer,
+    const size_t /*num_frames*/,
+    const size_t /*num_channels*/,
+    const std::span<const ValueTypeInBuffer> samples) -> bool {
+  static_assert(TL_AUDIO_WAV_WRITER_BUFFER_SIZE >= 0);
+
+  // This is more of provisionary check, to avoid possible warnings about zero
+  // sized buffer.
+  if constexpr (TL_AUDIO_WAV_WRITER_BUFFER_SIZE > 1) {
+    // Buffer for reading from the file.
+    std::array<ValueTypeInFile, TL_AUDIO_WAV_WRITER_BUFFER_SIZE> buffer;
+
+    size_t num_samples_written = 0;
+    size_t num_remaining_samples = samples.size();
+
+    while (num_remaining_samples != 0) {
+      const size_t num_samples_to_write = std::min(
+          size_t(TL_AUDIO_WAV_WRITER_BUFFER_SIZE), num_remaining_samples);
+      const size_t num_bytes_to_write =
+          num_samples_to_write * sizeof(ValueTypeInFile);
+
+      // Convert type from how it's stored in the file to the return sample
+      // type.
+      for (size_t i = 0; i < num_samples_to_write; ++i) {
+        buffer[i] = ConvertValue<ValueTypeInBuffer, ValueTypeInFile>(
+            samples[num_samples_written++]);
+      }
+
+      // Write current buffer.
+      if (file_writer.Write(buffer.data(), num_bytes_to_write) !=
+          num_bytes_to_write) {
+        return false;
+      }
+
+      num_remaining_samples -= num_samples_to_write;
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+// Write multiple samples. Will choose the best strategy to use based on the
+// current configuration.
+//
+// Writes the entire samples buffer, without performing any checks about
+// validity.
+//
+// Returns true on success, false otherwise.
+template <class ValueTypeInFile, class FileWriter, class ValueTypeInBuffer>
+[[nodiscard]] inline auto WriteMultipleSamples(
+    FileWriter& file_writer,
+    const size_t num_frames,
+    const size_t num_channels,
+    const std::span<const ValueTypeInBuffer> samples) -> bool {
+  static_assert(TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE >= 0);
+
+  if constexpr (TL_AUDIO_WAV_WRITER_BUFFER_SIZE > 1) {
+    return WriteMultipleSamplesBuffered<ValueTypeInFile>(
+        file_writer, num_frames, num_channels, samples);
+  }
+
+  return WriteMultipleSamplesUnbuffered<ValueTypeInFile>(
+      file_writer, num_frames, num_channels, samples);
+}
+
 }  // namespace internal
 
 template <class FileWriter>
-auto Writer<FileWriter>::WritePlaceholderHeader() -> bool {
+[[nodiscard]] auto Writer<FileWriter>::WritePlaceholderHeader() -> bool {
   assert(is_open_);
 
   // Specify the chunk size to the max possible value, allowing reader of a
@@ -692,7 +989,7 @@ auto Writer<FileWriter>::WritePlaceholderHeader() -> bool {
 }
 
 template <class FileWriter>
-auto Writer<FileWriter>::WriteFinalHeader() -> bool {
+[[nodiscard]] auto Writer<FileWriter>::WriteFinalHeader() -> bool {
   assert(is_open_);
 
   return internal::WriteHeader(
@@ -701,12 +998,21 @@ auto Writer<FileWriter>::WriteFinalHeader() -> bool {
 
 template <class FileWriter>
 template <class ValueTypeInFile, class ValueTypeInBuffer>
-auto Writer<FileWriter>::WriteSingleSample(
+[[nodiscard]] auto Writer<FileWriter>::WriteSingleSample(
     const std::span<const ValueTypeInBuffer> sample) -> bool {
   assert(is_open_);
 
-  if (!internal::WriteSample<ValueTypeInFile>(
-          *file_writer_, format_spec_, sample)) {
+  // Check for every sample as depending on data structure in the user code it
+  // might be not guaranteed that all samples contains the same number of
+  // channels.
+  const size_t num_values = std::size(sample);
+  if (num_values != format_spec_.num_channels) {
+    return false;
+  }
+
+  // TODO(sergey): Make sure the number of samples fits MaxNumSamples().
+
+  if (!internal::WriteSingleSample<ValueTypeInFile>(*file_writer_, sample)) {
     return false;
   }
 
@@ -716,28 +1022,54 @@ auto Writer<FileWriter>::WriteSingleSample(
 }
 
 template <class FileWriter>
-template <class ValueTypeInFile, class FileWriterType, class SamplesType>
-auto Writer<FileWriter>::Write(FileWriterType&& file_writer,
-                               const FormatSpec& format_spec,
-                               const SamplesType& samples) -> bool {
-  const size_t num_samples = std::size(samples);
-  if (num_samples > MaxNumSamples(format_spec)) {
+template <class ValueTypeInFile, class ValueTypeInBuffer>
+[[nodiscard]] auto Writer<FileWriter>::WriteMultipleSamples(
+    const std::span<const ValueTypeInBuffer> samples) -> bool {
+  assert(is_open_);
+
+  const size_t num_channels = format_spec_.num_channels;
+  const size_t num_frames = samples.size() / num_channels;
+
+  // Check that the buffer has expected size.
+  if (num_frames * num_channels != samples.size()) {
     return false;
   }
 
-  if (!internal::WriteHeader(file_writer, format_spec, num_samples)) {
+  // TODO(sergey): Make sure the number of samples fits MaxNumSamples().
+
+  if (!internal::WriteMultipleSamples<ValueTypeInFile>(
+          *file_writer_, num_frames, num_channels, samples)) {
     return false;
   }
 
-  for (const auto& sample : samples) {
-    if (!internal::WriteSample<ValueTypeInFile>(
-            file_writer, format_spec, sample)) {
-      return false;
-    }
-  }
+  num_samples_written_ += num_frames;
 
   return true;
 }
+
+template <class FileWriter>
+template <class ValueTypeInFile, class FileWriterType, class ValueTypeInBuffer>
+[[nodiscard]] auto Writer<FileWriter>::Write(
+    FileWriterType&& file_writer,
+    const FormatSpec& format_spec,
+    const std::span<const ValueTypeInBuffer> samples) -> bool {
+  Writer<FileWriter> writer;
+
+  if (!writer.Open(file_writer, format_spec)) {
+    return false;
+  }
+
+  if (!writer.template WriteMultipleSamples<ValueTypeInFile, ValueTypeInBuffer>(
+          samples)) {
+    return false;
+  }
+
+  return writer.Close();
+}
+
+#if defined(_MSC_VER)
+#  pragma warning(pop)
+#endif
 
 }  // namespace TL_AUDIO_WAV_WRITER_VERSION_NAMESPACE
 }  // namespace TL_AUDIO_WAV_WRITER_NAMESPACE
@@ -745,6 +1077,8 @@ auto Writer<FileWriter>::Write(FileWriterType&& file_writer,
 #undef TL_AUDIO_WAV_WRITER_VERSION_MAJOR
 #undef TL_AUDIO_WAV_WRITER_VERSION_MINOR
 #undef TL_AUDIO_WAV_WRITER_VERSION_REVISION
+
+#undef TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE
 
 #undef TL_AUDIO_WAV_WRITER_NAMESPACE
 

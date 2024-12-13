@@ -21,5 +21,18 @@ function(tl_audio_wav_test PRIMITIVE_NAME)
           LIBRARIES tl_audio_wav)
 endfunction()
 
-tl_audio_wav_test(reader)
-tl_audio_wav_test(writer)
+tl_test(audio_wav_reader_buffered test/tl_audio_wav_reader_test.cc
+        LIBRARIES tl_audio_wav)
+tl_test(audio_wav_reader_unbuffered test/tl_audio_wav_reader_test.cc
+  LIBRARIES tl_audio_wav
+  DEFINITIONS TL_AUDIO_WAV_READER_SAMPLE_FRAME_BUFFER_SIZE=0
+              TL_AUDIO_WAV_READER_BUFFER_SIZE=0
+)
+
+tl_test(audio_wav_writer_buffered test/tl_audio_wav_writer_test.cc
+        LIBRARIES tl_audio_wav)
+tl_test(audio_wav_writer_unbuffered test/tl_audio_wav_writer_test.cc
+  LIBRARIES tl_audio_wav
+  DEFINITIONS TL_AUDIO_WAV_WRITER_SAMPLE_FRAME_BUFFER_SIZE=0
+              TL_AUDIO_WAV_WRITER_BUFFER_SIZE=0
+)

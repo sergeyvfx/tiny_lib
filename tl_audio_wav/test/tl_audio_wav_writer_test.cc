@@ -40,6 +40,8 @@ struct SimpleWAV<std::endian::little> {
       std::array<float, 2>{0.2f, 0.5f},
       std::array<float, 2>{0.3f, 0.6f},
   });
+  static constexpr std::span<const float> kSamplesFloatFlat{
+      kSamplesFloat[0].data(), sizeof(kSamplesFloat) / sizeof(float)};
 
   // Integral int16_t samples provided to the writer.
   static constexpr auto kSamplesInt16 = std::to_array({
@@ -47,6 +49,8 @@ struct SimpleWAV<std::endian::little> {
       std::array<int16_t, 2>{6553, 16383},
       std::array<int16_t, 2>{9830, 19660},
   });
+  static constexpr std::span<const int16_t> kSamplesInt16Flat{
+      kSamplesInt16[0].data(), sizeof(kSamplesInt16) / sizeof(int16_t)};
 
   // Expected data tp be saved.
   static constexpr auto kData = std::to_array<uint8_t>({
@@ -149,7 +153,7 @@ TEST(tl_audio_wav_writer, MaxNumSamples) {
   }
 }
 
-TEST(tl_audio_wav_writer, WriteSample) {
+TEST(tl_audio_wav_writer, WriteSingleSample) {
   using SimpleWAV = SimpleWAV<std::endian::native>;
 
   const FormatSpec format_spec = {
@@ -191,6 +195,38 @@ TEST(tl_audio_wav_writer, WriteSample) {
   }
 }
 
+TEST(tl_audio_wav_writer, WriteMultipleSamples) {
+  using SimpleWAV = SimpleWAV<std::endian::native>;
+
+  const FormatSpec format_spec = {
+      .num_channels = 2,
+      .sample_rate = 44100,
+      .bit_depth = 16,
+  };
+
+  // float source samples.
+  {
+    SimpleFileWriterToMemory file_writer;
+    Writer<SimpleFileWriterToMemory> wav_writer;
+
+    EXPECT_TRUE(wav_writer.Open(file_writer, format_spec));
+    EXPECT_TRUE(wav_writer.WriteMultipleSamples(SimpleWAV::kSamplesFloatFlat));
+    EXPECT_TRUE(wav_writer.Close());
+    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), SimpleWAV::kData));
+  }
+
+  // int16_t source samples.
+  {
+    SimpleFileWriterToMemory file_writer;
+    Writer<SimpleFileWriterToMemory> wav_writer;
+
+    EXPECT_TRUE(wav_writer.Open(file_writer, format_spec));
+    EXPECT_TRUE(wav_writer.WriteMultipleSamples(SimpleWAV::kSamplesInt16Flat));
+    EXPECT_TRUE(wav_writer.Close());
+    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), SimpleWAV::kData));
+  }
+}
+
 TEST(tl_audio_wav_writer, SimplePipeline) {
   using SimpleWAV = SimpleWAV<std::endian::native>;
 
@@ -205,7 +241,7 @@ TEST(tl_audio_wav_writer, SimplePipeline) {
     SimpleFileWriterToMemory file_writer;
 
     EXPECT_TRUE(Writer<SimpleFileWriterToMemory>::Write(
-        file_writer, format_spec, SimpleWAV::kSamplesFloat));
+        file_writer, format_spec, SimpleWAV::kSamplesFloatFlat));
 
     EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), SimpleWAV::kData));
   }
@@ -215,7 +251,7 @@ TEST(tl_audio_wav_writer, SimplePipeline) {
     SimpleFileWriterToMemory file_writer;
 
     EXPECT_TRUE(Writer<SimpleFileWriterToMemory>::Write(
-        file_writer, format_spec, SimpleWAV::kSamplesInt16));
+        file_writer, format_spec, SimpleWAV::kSamplesInt16Flat));
 
     EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), SimpleWAV::kData));
   }
