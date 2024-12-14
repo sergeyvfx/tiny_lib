@@ -83,7 +83,7 @@ struct SimpleWAV<std::endian::little> {
   });
 };
 
-// Minimaliztic implementation of a file writer interface which writes data to
+// Minimalistic implementation of a file writer interface which writes data to
 // an in-memory container.
 class FileWriterToMemory {
  public:

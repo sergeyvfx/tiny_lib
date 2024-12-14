@@ -85,6 +85,7 @@
 // Version history
 // ===============
 //
+//   0.0.3-alpha    (14 Dec 2024)    Support RF64 file format.
 //   0.0.2-alpha    (13 Dec 2024)    Various improvements with the goal to
 //                                   support buffered reading:
 //                                   - Implement buffered reading.
@@ -102,6 +103,8 @@
 #include <functional>
 #include <limits>
 #include <span>
+
+#include "tl_audio_wav_writer.h"
 
 // Semantic version of the tl_audio_wav_reader library.
 #define TL_AUDIO_WAV_READER_VERSION_MAJOR 0
@@ -174,6 +177,7 @@ enum class AudioFormat : uint16_t;
 
 struct ChunkHeader;
 struct RIFFData;
+struct DS64;
 struct FormatData;
 
 }  // namespace internal
@@ -303,7 +307,7 @@ class Reader {
   [[nodiscard]] inline auto ReadChunkHeader(internal::ChunkHeader& header)
       -> bool;
 
-  // Read the RIFF/RIFX header.
+  // Read the RIFF/RIFX/RF64 header.
   // Upon success will initialize the file endian.
   [[nodiscard]] inline auto ReadRIFFHeader(internal::ChunkHeader& riff_header)
       -> bool;
@@ -313,7 +317,7 @@ class Reader {
 
   // Skip given number of bytes from the current location of file.
   // Returns true if all requested bytes has been skipped.
-  [[nodiscard]] inline auto FileSkipNumBytes(uint32_t num_bytes) -> bool;
+  [[nodiscard]] inline auto FileSkipNumBytes(uint64_t num_bytes) -> bool;
 
   // Read the file seeking for a chunk header of given ID.
   //
@@ -321,6 +325,9 @@ class Reader {
   // is returned.
   [[nodiscard]] inline auto SeekChunkID(internal::ChunkID id,
                                         internal::ChunkHeader& header) -> bool;
+
+  // Read the DS64 data.
+  [[nodiscard]] inline auto ReadDS64(internal::DS64& ds64) -> bool;
 
   // Seek for a format chunk and read its data.
   [[nodiscard]] inline auto SeekAndReadFormatData(
@@ -397,8 +404,8 @@ class Reader {
 
   // Total size of the DATA chunk is bytes and number of bytes read from it.
   // Used to detect when reading is to stop.
-  uint32_t data_chunk_size_in_bytes_ = 0;
-  uint32_t num_read_bytes_ = 0;
+  uint64_t data_chunk_size_in_bytes_ = 0;
+  uint64_t num_read_bytes_ = 0;
 };
 
 #if defined(_MSC_VER)
@@ -437,10 +444,10 @@ template <class FileReader>
 inline auto Reader<FileReader>::GetDurationInSeconds() const -> float {
   const uint32_t byte_depth = format_spec_.bit_depth / 8;
 
-  const uint32_t num_samples_in_one_channel =
+  const float num_samples_in_one_channel =
       data_chunk_size_in_bytes_ / format_spec_.num_channels / byte_depth;
 
-  return float(num_samples_in_one_channel) / format_spec_.sample_rate;
+  return num_samples_in_one_channel / format_spec_.sample_rate;
 }
 
 template <class FileReader>
@@ -547,6 +554,12 @@ enum class ChunkID : uint32_t {
   // RIFX is RIFF header but for a file using big endian.
   kRIFX = IDStringToUInt32('R', 'I', 'F', 'X'),
 
+  // RF64 sisa header for 64-bit files.
+  kRF64 = IDStringToUInt32('R', 'F', '6', '4'),
+
+  // Data size 64.
+  kDS64 = IDStringToUInt32('d', 's', '6', '4'),
+
   kFMT = IDStringToUInt32('f', 'm', 't', ' '),
   kDATA = IDStringToUInt32('d', 'a', 't', 'a'),
 };
@@ -572,11 +585,34 @@ struct ChunkHeader {
 static_assert(sizeof(ChunkHeader) == 8);
 
 // Data of a RIFF chunk (`ChunkID::RIFF` for files stored in little endian and
-// `ChunkID::RIFX` for files stored in big endian).
+// `ChunkID::RIFX` for files stored in big endian, `ChunkID::RF64` for 64-bit
+// files).
 struct RIFFData {
   Format format;  // Format of the file.
 };
 static_assert(sizeof(RIFFData) == 4);
+
+// ds64 chunk.
+// It  has to be the first chunk after the `RF64 chunk`.
+struct DS64 {
+  uint32_t riff_size_low;      // Low 4 byte size of RF64 block.
+  uint32_t riff_size_high;     // High 4 byte size of RF64 block.
+  uint32_t data_size_low;      // Low 4 byte size of data chunk.
+  uint32_t data_size_high;     // High 4 byte size of data chunk.
+  uint32_t sample_count_low;   // Low 4 byte sample count of fact chunk.
+  uint32_t sample_count_high;  // High 4 byte sample count of fact chunk.
+  uint32_t table_length;       // Number of valid entries in array “table”.
+
+  // The table relies on the following type:
+  //   struct ChunkSize64 {
+  //     char chunkId[4];  // chunk ID (i.e. “big1” – this chunk is a big one)
+  //     unsigned int32 chunkSizeLow;   // low 4 byte chunk size
+  //     unsigned int32 chunkSizeHigh;  // high 4 byte chunk size
+  //   };
+  //
+  // ChunkSize64 table[];
+};
+static_assert(sizeof(DS64) == 28);
 
 struct FormatData {
   // Format in which audio data is stored.
@@ -657,7 +693,7 @@ template <class T>
 // Get endian in which file is stored based on the RIFF header.
 [[nodiscard]] inline auto EndianFromRIFFHeader(const ChunkHeader& riff_header)
     -> std::endian {
-  if (riff_header.id == ChunkID::kRIFF) {
+  if (riff_header.id == ChunkID::kRIFF || riff_header.id == ChunkID::kRF64) {
     return std::endian::little;
   }
 
@@ -709,6 +745,21 @@ template <class FileReader>
   if (!ReadRIFFData(riff_data)) {
     return false;
   }
+  if (riff_data.format != internal::Format::kWAVE) {
+    return false;
+  }
+
+  // Read 64-bit information of the file.
+  bool has_64bit_info = false;
+  if (riff_header.id == internal::ChunkID::kRF64) {
+    internal::DS64 ds64;
+    if (!ReadDS64(ds64)) {
+      return false;
+    }
+    data_chunk_size_in_bytes_ =
+        uint64_t(ds64.data_size_high << 4) | ds64.data_size_low;
+    has_64bit_info = true;
+  }
 
   // Read format data and check that it is supported.
 
@@ -730,7 +781,9 @@ template <class FileReader>
   // Set up the format.
   format_spec_ = FormatDataToFormatSpec(format_data);
 
-  data_chunk_size_in_bytes_ = data_header.size;
+  if (data_header.size != -1 || !has_64bit_info) {
+    data_chunk_size_in_bytes_ = data_header.size;
+  }
 
   return true;
 }
@@ -774,7 +827,8 @@ template <class FileReader>
 
   // Make sure this is an expected header.
   if (riff_header.id != internal::ChunkID::kRIFF &&
-      riff_header.id != internal::ChunkID::kRIFX) {
+      riff_header.id != internal::ChunkID::kRIFX &&
+      riff_header.id != internal::ChunkID::kRF64) {
     return false;
   }
 
@@ -788,13 +842,19 @@ template <class FileReader>
 template <class FileReader>
 [[nodiscard]] inline auto Reader<FileReader>::ReadRIFFData(
     internal::RIFFData& riff_data) -> bool {
-  return ReadObjectInMemory(riff_data);
+  if (!ReadObjectInMemory(riff_data)) {
+    return false;
+  }
+
+  FileToNativeEndian(riff_data.format);
+
+  return true;
 }
 
 template <class FileReader>
 [[nodiscard]] inline auto Reader<FileReader>::FileSkipNumBytes(
-    const uint32_t num_bytes) -> bool {
-  uint32_t num_remaining_bytes_to_skip = num_bytes;
+    const uint64_t num_bytes) -> bool {
+  uint64_t num_remaining_bytes_to_skip = num_bytes;
 
   // Read in chunks of 4 bytes to minimize the number of reads.
   while (num_remaining_bytes_to_skip >= 4) {
@@ -806,7 +866,7 @@ template <class FileReader>
   }
 
   // Read remaining bytes.
-  for (uint32_t i = 0; i < num_remaining_bytes_to_skip; ++i) {
+  for (uint64_t i = 0; i < num_remaining_bytes_to_skip; ++i) {
     uint8_t unused;
     if (file_reader_->Read(static_cast<void*>(&unused), 1) != 1) {
       return false;
@@ -831,6 +891,41 @@ template <class FileReader>
     }
   }
   return false;
+}
+
+template <class FileReader>
+[[nodiscard]] inline auto Reader<FileReader>::ReadDS64(internal::DS64& ds64)
+    -> bool {
+  // Read the header and ensure it is the expected one.
+  internal::ChunkHeader ds64_header;
+  if (!ReadObjectInMemory(ds64_header)) {
+    return false;
+  }
+  if (ds64_header.id != internal::ChunkID::kDS64) {
+    return false;
+  }
+
+  // Check the expected size of the chunk.
+  // TODO(sergey): Support ds64 chunk with tables.
+  if (ds64_header.size != sizeof(internal::DS64)) {
+    return false;
+  }
+
+  if (!ReadObjectInMemory(ds64)) {
+    return false;
+  }
+
+  FileToNativeEndian(ds64.riff_size_low);
+  FileToNativeEndian(ds64.riff_size_high);
+  FileToNativeEndian(ds64.data_size_low);
+  FileToNativeEndian(ds64.data_size_high);
+  FileToNativeEndian(ds64.sample_count_low);
+  FileToNativeEndian(ds64.sample_count_high);
+  FileToNativeEndian(ds64.table_length);
+
+  // TODO(sergey): Read the table.
+
+  return true;
 }
 
 template <class FileReader>
@@ -924,7 +1019,7 @@ template <class ValueTypeInFile, class ValueTypeInBuffer>
   }
 
   // If needed skip the remaining values, getting ready to read the next sample.
-  const uint32_t num_bytes_to_skip =
+  const uint64_t num_bytes_to_skip =
       (format_spec_.num_channels - num_channels_to_read) *
       sizeof(ValueTypeInFile);
   return FileSkipNumBytes(num_bytes_to_skip);
