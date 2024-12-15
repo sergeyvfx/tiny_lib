@@ -67,6 +67,7 @@
 // Version history
 // ===============
 //
+//   0.0.4-alpha    (15 Dec 2024)    Fixed memory leak in streamed logger.
 //   0.0.3-alpha    (22 Sep 2024)    Added format printf attribute to the log
 //                                   function that implements printf() style of
 //                                   formatting.
@@ -214,6 +215,8 @@ class Functions {
 
   // Free buffer allocated for a put area of a message printer.
   //
+  // It is only called for non null-ptr buffers.
+  //
   // The buffer size matches the size provided by the allocator.
   virtual void FreePrintBuffer(char* buffer, size_t buffer_size) = 0;
 };
@@ -359,6 +362,12 @@ class StreamBuffer : public std::streambuf {
     buffer_ = Context::Get().AllocatePrintBuffer(buffer_size_);
 
     setp(buffer_, buffer_ + buffer_size_);
+  }
+
+  ~StreamBuffer() {
+    if (buffer_) {
+      Context::Get().FreePrintBuffer(buffer_, buffer_size_);
+    }
   }
 
   inline auto overflow(const int ch) -> int override {
@@ -511,7 +520,11 @@ inline void FormatAndLogArgumentList(const Severity severity,
   // Allocate buffer for formatting.
   size_t buffer_size = 0;
   char* buffer = ctx.AllocatePrintBuffer(buffer_size);
-  if (!buffer_size || !buffer_size) {
+  if (!buffer) {
+    return;
+  }
+  if (!buffer_size) {
+    ctx.FreePrintBuffer(buffer, buffer_size);
     return;
   }
 

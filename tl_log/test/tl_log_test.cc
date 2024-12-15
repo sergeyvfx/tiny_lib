@@ -15,17 +15,25 @@ namespace tiny_lib::log {
 
 class BaseFunctions : public Functions {
  public:
+  ~BaseFunctions() { EXPECT_EQ(bytes_allocated_, 0); }
+
   [[noreturn]] void Fail() override { abort(); }
 
   auto AllocatePrintBuffer(size_t& buffer_size) -> char* override {
     constexpr size_t kBufferSize = 1024;
     buffer_size = kBufferSize;
+    bytes_allocated_ += kBufferSize;
     return new char[kBufferSize];
   }
 
-  void FreePrintBuffer(char* buffer, const size_t /*buffer_size*/) override {
+  void FreePrintBuffer(char* buffer, const size_t buffer_size) override {
+    EXPECT_GE(bytes_allocated_, buffer_size);
+    bytes_allocated_ -= buffer_size;
     delete[] buffer;
   }
+
+ private:
+  int bytes_allocated_ = 0;
 };
 
 class StringFunctions : public BaseFunctions {
