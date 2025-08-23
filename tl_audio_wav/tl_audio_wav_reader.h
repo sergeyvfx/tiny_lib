@@ -10,7 +10,6 @@
 // per-read-call function indirections in the cost of possible bigger binary
 // size.
 //
-//
 // Example
 // =======
 //
@@ -69,6 +68,14 @@
 // value in the case of error or reading past the EOF will work for the WAV
 // reader.
 //
+// References
+// ==========
+//
+//   Audio File Format Specifications
+//   https://web.archive.org/web/20100325183246/http://www-mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/WAVE.html
+//
+//   The PEAK chunk
+//   https://web.archive.org/web/20081201144551/http://music.calarts.edu/~tre/PeakChunk.html
 //
 // Limitations
 // ===========
@@ -85,6 +92,8 @@
 // Version history
 // ===============
 //
+//   0.0.4-alpha    (23 Aug 2025)    Support EXTENSIBLE format, and Float and
+//                                   Double sample types.
 //   0.0.3-alpha    (14 Dec 2024)    Support RF64 file format.
 //   0.0.2-alpha    (13 Dec 2024)    Various improvements with the goal to
 //                                   support buffered reading:
@@ -176,6 +185,7 @@ enum class Format : uint32_t;
 enum class AudioFormat : uint16_t;
 
 struct ChunkHeader;
+struct Guid;
 struct RIFFData;
 struct DS64;
 struct FormatData;
@@ -184,6 +194,13 @@ struct FormatData;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Public declarations.
+
+enum class Compression {
+  kUnknown,
+  kPCM16,
+  kFloat,
+  kDouble,
+};
 
 // Information about format in which the audio data is stored in a WAV file.
 struct FormatSpec {
@@ -197,6 +214,9 @@ struct FormatSpec {
   // Bit depth for per-channel sample values.
   // For example: 16 means values are stored as 16-bit signed integers.
   int bit_depth{-1};
+
+  // Compression (or encoding) used to store samples.
+  Compression compression{Compression::kUnknown};
 };
 
 // The WAV file reader declaration.
@@ -295,6 +315,7 @@ class Reader {
   // Convert value from how they were read from file to the native endianess.
   template <class T>
   inline void FileToNativeEndian(T& value);
+  inline void FileToNativeEndian(internal::Guid& value);
 
   // Read object from file stream directly into memory, without endian
   // conversion or any other semantic checks.
@@ -327,11 +348,11 @@ class Reader {
                                         internal::ChunkHeader& header) -> bool;
 
   // Read the DS64 data.
-  [[nodiscard]] inline auto ReadDS64(internal::DS64& ds64) -> bool;
+  [[nodiscard]] inline auto ReadDS64() -> bool;
 
   // Seek for a format chunk and read its data.
-  [[nodiscard]] inline auto SeekAndReadFormatData(
-      internal::FormatData& format_data) -> bool;
+  // Returns true if the format data is successfully decoded and is supported.
+  [[nodiscard]] inline auto SeekAndReadFormatData() -> bool;
 
   // Internal implementation of the public ReadSingleSample().
   //
@@ -454,8 +475,13 @@ template <class FileReader>
 template <class ValueType>
 auto Reader<FileReader>::ReadSingleSample(const std::span<ValueType> sample)
     -> bool {
-  switch (format_spec_.bit_depth) {
-    case 16: return ReadSingleSample<int16_t, ValueType>(sample);
+  switch (format_spec_.compression) {
+    case Compression::kUnknown: return false;
+    case Compression::kPCM16:
+      return ReadSingleSample<int16_t, ValueType>(sample);
+    case Compression::kFloat: return ReadSingleSample<float, ValueType>(sample);
+    case Compression::kDouble:
+      return ReadSingleSample<double, ValueType>(sample);
   }
   return false;
 }
@@ -463,9 +489,16 @@ auto Reader<FileReader>::ReadSingleSample(const std::span<ValueType> sample)
 template <class FileReader>
 template <class ValueType, size_t MaxChannels, class F, class... Args>
 auto Reader<FileReader>::ReadAllSamples(F&& callback, Args&&... args) -> bool {
-  switch (format_spec_.bit_depth) {
-    case 16:
+  switch (format_spec_.compression) {
+    case Compression::kUnknown: return false;
+    case Compression::kPCM16:
       return ReadAllSamples<int16_t, ValueType, MaxChannels>(
+          std::forward<F>(callback), std::forward<Args>(args)...);
+    case Compression::kFloat:
+      return ReadAllSamples<float, ValueType, MaxChannels>(
+          std::forward<F>(callback), std::forward<Args>(args)...);
+    case Compression::kDouble:
+      return ReadAllSamples<double, ValueType, MaxChannels>(
           std::forward<F>(callback), std::forward<Args>(args)...);
   }
 
@@ -560,6 +593,9 @@ enum class ChunkID : uint32_t {
   // Data size 64.
   kDS64 = IDStringToUInt32('d', 's', '6', '4'),
 
+  kFACT = IDStringToUInt32('f', 'a', 'c', 't'),
+  kPEAK = IDStringToUInt32('P', 'E', 'A', 'K'),
+
   kFMT = IDStringToUInt32('f', 'm', 't', ' '),
   kDATA = IDStringToUInt32('d', 'a', 't', 'a'),
 };
@@ -574,6 +610,8 @@ enum class Format : uint32_t {
 // Audio format stored in the FMT chunk.
 enum class AudioFormat : uint16_t {
   kPCM = 1,
+  kFloat = 3,
+  kEXTENSIBLE = 0xfffe,  // Format is determined by SubFormat.
 };
 
 // Header of a chunk.
@@ -614,6 +652,24 @@ struct DS64 {
 };
 static_assert(sizeof(DS64) == 28);
 
+struct Guid {
+  uint32_t data1;
+  uint16_t data2;
+  uint16_t data3;
+  uint32_t data4;
+  uint32_t data5;
+
+  auto operator==(const Guid& other) const -> bool = default;
+};
+static_assert(sizeof(Guid) == 16);
+
+static constexpr Guid DATA_FORMAT_SUBTYPE_UNKNOWN{0x00, 0x00, 0x00, 0x00, 0x00};
+
+static constexpr Guid DATA_FORMAT_SUBTYPE_PCM{
+    0x00000001, 0x0000, 0x0010, 0xaa000080, 0x719b3800};
+static constexpr Guid DATA_FORMAT_SUBTYPE_FLOAT{
+    0x00000003, 0x0000, 0x0010, 0xaa000080, 0x719b3800};
+
 struct FormatData {
   // Format in which audio data is stored.
   // Mnemonic representation is in `AudioFormat` enumerator.
@@ -636,6 +692,20 @@ struct FormatData {
   uint16_t bit_depth;
 };
 static_assert(sizeof(FormatData) == 16);
+
+struct ExtensibleExtraData {
+  // Extra information (after cbSize) to store, in bytes.
+  uint16_t cb_size;
+
+  // Valid bits per sample (for example 8, 16, 20, 24).
+  uint16_t valid_bits_per_sample;
+
+  // Channel mask for channel allocation.
+  uint32_t channel_mask;
+
+  Guid sub_format;
+};
+static_assert(sizeof(ExtensibleExtraData) == 24);
 
 template <class T>
 inline auto Byteswap(T value) -> T;
@@ -667,9 +737,27 @@ template <>
 #endif
 }
 
+// Swap endianess of 64 bit unsigned int value.
+template <>
+[[nodiscard]] inline auto Byteswap(const uint64_t value) -> uint64_t {
+#if defined(__GNUC__)
+  return __builtin_bswap64(value);
+#elif defined(_MSC_VER)
+  return _byteswap_uint64(value);
+#else
+  return ((value >> 56)) | ((value << 40) & 0x00ff000000000000ll) |
+         ((value << 24) & 0x0000ff0000000000ll) |
+         ((value << 8) & 0x000000ff00000000ll) |
+         ((value >> 8) & 0x00000000ff000000ll) |
+         ((value >> 24) & 0x0000000000ff0000ll) |
+         ((value >> 40) & 0x000000000000ff00ll) | ((value << 56));
+#endif
+}
+
 template <class T>
 [[nodiscard]] inline auto Byteswap(const T value) -> T {
-  static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4);
+  static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4 ||
+                sizeof(T) == 8);
 
   if constexpr (sizeof(T) == 1) {
     return value;
@@ -682,6 +770,11 @@ template <class T>
 
   if constexpr (sizeof(T) == 4) {
     uint32_t result = Byteswap(*reinterpret_cast<const uint32_t*>(&value));
+    return *reinterpret_cast<T*>(&result);
+  }
+
+  if constexpr (sizeof(T) == 8) {
+    uint64_t result = Byteswap(*reinterpret_cast<const uint64_t*>(&value));
     return *reinterpret_cast<T*>(&result);
   }
 
@@ -699,35 +792,6 @@ template <class T>
 
   assert(riff_header.id == ChunkID::kRIFX);
   return std::endian::big;
-}
-
-// Check whether the format is supported by the reader.
-[[nodiscard]] inline auto IsSupportedFormat(const FormatData& format_data)
-    -> bool {
-  // Only uncompressed PCM data is supported and uint16 samples are supported.
-
-  if (format_data.audio_format != AudioFormat::kPCM) {
-    return false;
-  }
-
-  if (format_data.bit_depth != 16) {
-    return false;
-  }
-
-  return true;
-}
-
-[[nodiscard]] inline auto FormatDataToFormatSpec(const FormatData& format_data)
-    -> FormatSpec {
-  FormatSpec format_spec;
-
-  assert(format_data.sample_rate < std::numeric_limits<int>::max());
-
-  format_spec.num_channels = format_data.num_channels;
-  format_spec.sample_rate = int(format_data.sample_rate);
-  format_spec.bit_depth = format_data.bit_depth;
-
-  return format_spec;
 }
 
 }  // namespace internal
@@ -750,25 +814,14 @@ template <class FileReader>
   }
 
   // Read 64-bit information of the file.
-  bool has_64bit_info = false;
   if (riff_header.id == internal::ChunkID::kRF64) {
-    internal::DS64 ds64;
-    if (!ReadDS64(ds64)) {
+    if (!ReadDS64()) {
       return false;
     }
-    data_chunk_size_in_bytes_ =
-        uint64_t(ds64.data_size_high << 4) | ds64.data_size_low;
-    has_64bit_info = true;
   }
 
   // Read format data and check that it is supported.
-
-  internal::FormatData format_data;
-  if (!SeekAndReadFormatData(format_data)) {
-    return false;
-  }
-
-  if (!internal::IsSupportedFormat(format_data)) {
+  if (!SeekAndReadFormatData()) {
     return false;
   }
 
@@ -778,11 +831,12 @@ template <class FileReader>
     return false;
   }
 
-  // Set up the format.
-  format_spec_ = FormatDataToFormatSpec(format_data);
-
-  if (data_header.size != -1 || !has_64bit_info) {
+  if (riff_header.id != internal::ChunkID::kRF64) {
     data_chunk_size_in_bytes_ = data_header.size;
+  }
+
+  if (format_spec_.compression == Compression::kUnknown) {
+    return false;
   }
 
   return true;
@@ -793,6 +847,17 @@ template <class T>
 inline void Reader<FileReader>::FileToNativeEndian(T& value) {
   if (file_endian_ != std::endian::native) {
     value = internal::Byteswap(value);
+  }
+}
+
+template <class FileReader>
+inline void Reader<FileReader>::FileToNativeEndian(internal::Guid& value) {
+  if (file_endian_ != std::endian::native) {
+    value.data1 = internal::Byteswap(value.data1);
+    value.data2 = internal::Byteswap(value.data2);
+    value.data3 = internal::Byteswap(value.data3);
+    value.data4 = internal::Byteswap(value.data4);
+    value.data5 = internal::Byteswap(value.data5);
   }
 }
 
@@ -894,8 +959,7 @@ template <class FileReader>
 }
 
 template <class FileReader>
-[[nodiscard]] inline auto Reader<FileReader>::ReadDS64(internal::DS64& ds64)
-    -> bool {
+[[nodiscard]] inline auto Reader<FileReader>::ReadDS64() -> bool {
   // Read the header and ensure it is the expected one.
   internal::ChunkHeader ds64_header;
   if (!ReadObjectInMemory(ds64_header)) {
@@ -911,6 +975,7 @@ template <class FileReader>
     return false;
   }
 
+  internal::DS64 ds64;
   if (!ReadObjectInMemory(ds64)) {
     return false;
   }
@@ -925,26 +990,31 @@ template <class FileReader>
 
   // TODO(sergey): Read the table.
 
+  data_chunk_size_in_bytes_ =
+      uint64_t(ds64.data_size_high << 4) | ds64.data_size_low;
+
   return true;
 }
 
 template <class FileReader>
-[[nodiscard]] inline auto Reader<FileReader>::SeekAndReadFormatData(
-    internal::FormatData& format_data) -> bool {
+[[nodiscard]] inline auto Reader<FileReader>::SeekAndReadFormatData() -> bool {
   internal::ChunkHeader format_header;
   if (!SeekChunkID(internal::ChunkID::kFMT, format_header)) {
     // No format chunk found in the file.
     return false;
   }
 
-  if (format_header.size != sizeof(internal::FormatData)) {
+  // The format header has variable length, for example, when it uses EXTENSIBLE
+  // format.
+  if (format_header.size < sizeof(internal::FormatData)) {
     return false;
   }
 
+  // Read the common part of the format data.
+  internal::FormatData format_data;
   if (!ReadObjectInMemory(format_data)) {
     return false;
   }
-
   FileToNativeEndian(format_data.audio_format);
   FileToNativeEndian(format_data.num_channels);
   FileToNativeEndian(format_data.sample_rate);
@@ -952,7 +1022,77 @@ template <class FileReader>
   FileToNativeEndian(format_data.block_align);
   FileToNativeEndian(format_data.bit_depth);
 
-  return true;
+  // Assign common part of the format specification.
+  format_spec_.num_channels = format_data.num_channels;
+  format_spec_.sample_rate = int(format_data.sample_rate);
+  format_spec_.bit_depth = format_data.bit_depth;
+
+  if (format_data.audio_format == internal::AudioFormat::kPCM) {
+    if (format_data.bit_depth == 16) {
+      format_spec_.compression = Compression::kPCM16;
+      return true;
+    }
+    // TODO(sergey): Support 8, 24, and 32 bit PCM.
+    return false;
+  }
+
+  if (format_data.audio_format == internal::AudioFormat::kFloat) {
+    if (format_data.bit_depth == 32) {
+      format_spec_.compression = Compression::kFloat;
+      return true;
+    }
+    if (format_data.bit_depth == 64) {
+      format_spec_.compression = Compression::kDouble;
+      return true;
+    }
+    return false;
+  }
+
+  if (format_data.audio_format == internal::AudioFormat::kEXTENSIBLE) {
+    internal::ExtensibleExtraData extra_data;
+    if (!ReadObjectInMemory(extra_data)) {
+      return false;
+    }
+
+    FileToNativeEndian(extra_data.cb_size);
+    FileToNativeEndian(extra_data.valid_bits_per_sample);
+    FileToNativeEndian(extra_data.channel_mask);
+
+    // Check the expected size of the extensible data.
+    if (extra_data.cb_size !=
+        sizeof(internal::ExtensibleExtraData) -
+            sizeof(internal::ExtensibleExtraData::cb_size)) {
+      return false;
+    }
+
+    FileToNativeEndian(extra_data.sub_format);
+
+    if (extra_data.sub_format == internal::DATA_FORMAT_SUBTYPE_PCM) {
+      if (format_data.bit_depth == 16) {
+        format_spec_.compression = Compression::kPCM16;
+        return true;
+      }
+      // TODO(sergey): Support 8, 24, and 32 bit PCM.
+      return false;
+    }
+
+    if (extra_data.sub_format == internal::DATA_FORMAT_SUBTYPE_FLOAT) {
+      if (format_data.bit_depth == 32) {
+        format_spec_.compression = Compression::kFloat;
+        return true;
+      }
+      if (format_data.bit_depth == 64) {
+        format_spec_.compression = Compression::kDouble;
+        return true;
+      }
+      return false;
+    }
+
+    return false;
+  }
+
+  // Unknown audio format.
+  return false;
 }
 
 namespace internal {
@@ -978,6 +1118,28 @@ inline auto ConvertValue(const int16_t sample) -> float {
 template <>
 inline auto ConvertValue(const int16_t sample) -> int16_t {
   return sample;
+}
+
+template <>
+inline auto ConvertValue(const float sample) -> float {
+  return sample;
+}
+
+template <>
+inline auto ConvertValue(const float sample) -> int16_t {
+  // Reverse of ConvertValue(int64_t) -> float.
+  return std::clamp(sample, -1.0f, 1.0f) * 32767;
+}
+
+template <>
+inline auto ConvertValue(const double sample) -> float {
+  return float(sample);
+}
+
+template <>
+inline auto ConvertValue(const double sample) -> int16_t {
+  // Reverse of ConvertValue(int64_t) -> float.
+  return std::clamp(sample, -1.0, 1.0) * 32767;
 }
 
 }  // namespace internal
