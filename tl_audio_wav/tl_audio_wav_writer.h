@@ -26,6 +26,7 @@
 //   // Streamed writer.
 //
 //   const FormatSpec format_spec = {
+//       .file_format = FileFormat::kRIFF,
 //       .num_channels = 2,
 //       .sample_rate = 44100,
 //       .bit_depth = 16,
@@ -45,6 +46,7 @@
 //   // Streamed buffered writer.
 //
 //   const FormatSpec format_spec = {
+//       .file_format = FileFormat::kRIFF,
 //       .num_channels = 2,
 //       .sample_rate = 44100,
 //       .bit_depth = 16,
@@ -60,6 +62,7 @@
 //   // Bulked writer.
 //
 //   const FormatSpec format_spec = {
+//       .file_format = FileFormat::kRIFF,
 //       .num_channels = 2,
 //       .sample_rate = 44100,
 //       .bit_depth = 16,
@@ -119,6 +122,7 @@
 // Version history
 // ===============
 //
+//   0.0.3-alpha    (19 Oct 2025)    Support RF64 output format.
 //   0.0.2-alpha    (13 Dec 2024)    Various improvements with the goal to
 //                                   support buffered writing:
 //                                   - Implement buffered writing.
@@ -137,10 +141,12 @@
 #include <array>
 #include <bit>
 #include <cassert>
+#include <concepts>
 #include <cstdint>
 #include <cstdio>
 #include <iterator>
 #include <span>
+#include <type_traits>
 
 // Semantic version of the tl_audio_wav_writer library.
 #define TL_AUDIO_WAV_WRITER_VERSION_MAJOR 0
@@ -205,8 +211,25 @@ inline namespace TL_AUDIO_WAV_WRITER_VERSION_NAMESPACE {
 ////////////////////////////////////////////////////////////////////////////////
 // Public declarations.
 
+// Format used to store the WAVE file.
+enum class FileFormat {
+  // Original RIFF/WAVE format.
+  //
+  // The most compatible format, especially with an older software. The file is
+  // limited to 4 gigabyte in size with this format.
+  kRIFF,
+
+  // RF64 is an extension of the standard WAV format that overcomes the
+  // 4-gigabyte file size limit.
+  // It is less portable. While a lot of digital signal processing software
+  // supports this format, some Python libraries do not.
+  kRF64,
+};
+
 // Information about format in which the audio data is stored in a WAV file.
 struct FormatSpec {
+  FileFormat file_format{FileFormat::kRIFF};
+
   // Number of channels.
   // Rather self-explanatory: 1 is mono, 2 is stereo, 5 is surround.
   int num_channels{-1};
@@ -241,7 +264,7 @@ class Writer {
   // Calculate maximum number of samples which can be stored in a WAV file with
   // the given format specification.
   // The sample include values of all channels.
-  static inline auto MaxNumSamples(const FormatSpec& format_spec) -> uint32_t;
+  static inline auto MaxNumSamples(const FormatSpec& format_spec) -> uint64_t;
 
   // Open file for writing samples with the given specification into the file
   // writer.
@@ -287,7 +310,23 @@ class Writer {
   // the format specification, and the number of frames should be integer.
   // Otherwise an error is returned.
   template <class ValueType>
+    requires std::is_scalar_v<ValueType>
   auto WriteMultipleSamples(std::span<const ValueType> samples) -> bool;
+
+  // Write multiple samples organized in an array-of-arrays memory layout.
+  // The data is provided as span of arrays.
+  template <class ValueType, std::size_t Extent, std::size_t N>
+  auto WriteMultipleSamples(
+      const std::span<const std::array<ValueType, N>, Extent>& samples) -> bool;
+
+  // Write multiple samples organized in an array-of-arrays memory layout.
+  // The data is provided as container from which std::span could be
+  // constructed.
+  template <class ContainerType,
+            class ValueType = std::remove_reference_t<
+                decltype(*std::data(std::declval<ContainerType>()))>>
+    requires std::constructible_from<std::span<ValueType>, const ContainerType&>
+  auto WriteMultipleSamples(const ContainerType& container) -> bool;
 
   // Close the file writer by writing the final header.
   //
@@ -309,9 +348,35 @@ class Writer {
   //
   // Returns true if the file is fully written.
   template <class FileWriterType, class ValueType>
+    requires std::is_scalar_v<ValueType>
   static auto Write(FileWriterType&& file_writer,
                     const FormatSpec& format_spec,
                     std::span<const ValueType> samples) -> bool;
+
+  // Create WAV file from the given format specification and samples organized
+  // in an array-of-arrays memory layout.
+  // The data is provided as span of arrays.
+  template <class FileWriterType,
+            class ValueType,
+            std::size_t Extent,
+            std::size_t N>
+  static auto Write(
+      FileWriterType&& file_writer,
+      const FormatSpec& format_spec,
+      const std::span<const std::array<ValueType, N>, Extent>& samples) -> bool;
+
+  // Create WAV file from the given format specification and samples organized
+  // in an array-of-arrays memory layout.
+  // The data is provided as container from which std::span could be
+  // constructed.
+  template <class FileWriterType,
+            class ContainerType,
+            class ValueType = std::remove_reference_t<
+                decltype(*std::data(std::declval<ContainerType>()))>>
+    requires std::constructible_from<std::span<ValueType>, const ContainerType&>
+  static auto Write(FileWriterType&& file_writer,
+                    const FormatSpec& format_spec,
+                    const ContainerType& container) -> bool;
 
  private:
   // Write placeholder header upon the file Open().
@@ -359,7 +424,7 @@ class Writer {
 
   FormatSpec format_spec_;
 
-  uint32_t num_samples_written_ = 0;
+  uint64_t num_samples_written_ = 0;
 };
 
 #if defined(_MSC_VER)
@@ -435,6 +500,12 @@ enum class ChunkID : uint32_t {
   // RIFX is RIFF header but for a file using big endian.
   kRIFX = IDStringToUInt32('R', 'I', 'F', 'X'),
 
+  // RF64 sisa header for 64-bit files.
+  kRF64 = IDStringToUInt32('R', 'F', '6', '4'),
+
+  // Data size 64.
+  kDS64 = IDStringToUInt32('d', 's', '6', '4'),
+
   kFMT = IDStringToUInt32('f', 'm', 't', ' '),
   kDATA = IDStringToUInt32('d', 'a', 't', 'a'),
 };
@@ -466,6 +537,28 @@ struct RIFFData {
 };
 static_assert(sizeof(RIFFData) == 4);
 
+// ds64 chunk.
+// It  has to be the first chunk after the `RF64 chunk`.
+struct DS64 {
+  uint32_t riff_size_low;      // Low 4 byte size of RF64 block.
+  uint32_t riff_size_high;     // High 4 byte size of RF64 block.
+  uint32_t data_size_low;      // Low 4 byte size of data chunk.
+  uint32_t data_size_high;     // High 4 byte size of data chunk.
+  uint32_t sample_count_low;   // Low 4 byte sample count of fact chunk.
+  uint32_t sample_count_high;  // High 4 byte sample count of fact chunk.
+  uint32_t table_length;       // Number of valid entries in array “table”.
+
+  // The table relies on the following type:
+  //   struct ChunkSize64 {
+  //     char chunkId[4];  // chunk ID (i.e. “big1” – this chunk is a big one)
+  //     unsigned int32 chunkSizeLow;   // low 4 byte chunk size
+  //     unsigned int32 chunkSizeHigh;  // high 4 byte chunk size
+  //   };
+  //
+  // ChunkSize64 table[];
+};
+static_assert(sizeof(DS64) == 28);
+
 struct FormatData {
   // Format in which audio data is stored.
   // Mnemonic representation is in `AudioFormat` enumerator.
@@ -489,6 +582,36 @@ struct FormatData {
 };
 static_assert(sizeof(FormatData) == 16);
 
+// Calculate size which is to be specified in the RIFF/RIFX/RF64 chunk header.
+// This size is the size of the entire WAV file minus the header of the
+// RIFF/RIFX/RF64 chunk header.
+[[nodiscard]] inline auto CalculateRIFFContainerSize(
+    const FileFormat file_format, const uint64_t num_data_bytes) -> uint64_t {
+  switch (file_format) {
+    case FileFormat::kRIFF:
+      return
+          // Data of the RIFF/RIFX chunk.
+          sizeof(RIFFData) +
+          // Header and data of the FMT chunk.
+          sizeof(ChunkHeader) + sizeof(FormatData) +
+          // Header and data of the DATA chunk (samples).
+          sizeof(ChunkHeader) + num_data_bytes;
+
+    case FileFormat::kRF64:
+      return
+          // Data of the RF64 chunk.
+          sizeof(RIFFData) +
+          // Header and data of the DS64 chunk.
+          sizeof(ChunkHeader) + sizeof(DS64) +
+          // Header and data of the FMT chunk.
+          sizeof(ChunkHeader) + sizeof(FormatData) +
+          // Header and data of the DATA chunk (samples).
+          sizeof(ChunkHeader) + num_data_bytes;
+  }
+  assert(!"Unreachable code executed");
+  return 0;
+}
+
 }  // namespace internal
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -496,16 +619,15 @@ static_assert(sizeof(FormatData) == 16);
 
 template <class FileWriter>
 inline auto Writer<FileWriter>::MaxNumSamples(const FormatSpec& format_spec)
-    -> uint32_t {
-  constexpr uint32_t kMaxDataBytes =
-      0xffffffff - sizeof(internal::RIFFData) -
-      // Header and data of the FMT chunk.
-      sizeof(internal::ChunkHeader) - sizeof(internal::FormatData) -
-      // Header and data of the DATA chunk (samples).
-      sizeof(internal::ChunkHeader);
-
+    -> uint64_t {
+  const uint64_t headers_size =
+      internal::CalculateRIFFContainerSize(format_spec.file_format, 0);
   const uint32_t byte_depth = format_spec.bit_depth / 8;
-  return kMaxDataBytes / byte_depth / format_spec.num_channels;
+  const uint64_t max_data_bytes =
+      (format_spec.file_format == FileFormat::kRF64 ? 0xffffffffffffffff
+                                                    : 0xffffffff) -
+      headers_size;
+  return max_data_bytes / byte_depth / format_spec.num_channels;
 }
 
 template <class FileWriter>
@@ -546,12 +668,32 @@ auto Writer<FileWriter>::WriteSingleSample(
 
 template <class FileWriter>
 template <class ValueType>
+  requires std::is_scalar_v<ValueType>
 auto Writer<FileWriter>::WriteMultipleSamples(
     const std::span<const ValueType> samples) -> bool {
   switch (format_spec_.bit_depth) {
     case 16: return WriteMultipleSamples<int16_t, ValueType>(samples);
   }
   return false;
+}
+
+template <class FileWriter>
+template <class ValueType, std::size_t Extent, std::size_t N>
+auto Writer<FileWriter>::WriteMultipleSamples(
+    const std::span<const std::array<ValueType, N>, Extent>& samples) -> bool {
+  if (samples.empty()) {
+    return true;
+  }
+  const std::span<const ValueType> data(samples[0].data(), N * samples.size());
+  return WriteMultipleSamples(data);
+}
+
+template <class FileWriter>
+template <class ContainerType, class ValueType>
+  requires std::constructible_from<std::span<ValueType>, const ContainerType&>
+auto Writer<FileWriter>::WriteMultipleSamples(const ContainerType& container)
+    -> bool {
+  return WriteMultipleSamples(std::span(container));
 }
 
 template <class FileWriter>
@@ -574,6 +716,7 @@ auto Writer<FileWriter>::Close() -> bool {
 
 template <class FileWriter>
 template <class FileWriterType, class ValueType>
+  requires std::is_scalar_v<ValueType>
 auto Writer<FileWriter>::Write(FileWriterType&& file_writer,
                                const FormatSpec& format_spec,
                                const std::span<const ValueType> samples)
@@ -584,77 +727,32 @@ auto Writer<FileWriter>::Write(FileWriterType&& file_writer,
   return false;
 }
 
+template <class FileWriter>
+template <class FileWriterType,
+          class ValueType,
+          std::size_t Extent,
+          std::size_t N>
+auto Writer<FileWriter>::Write(
+    FileWriterType&& file_writer,
+    const FormatSpec& format_spec,
+    const std::span<const std::array<ValueType, N>, Extent>& samples) -> bool {
+  const std::span<const ValueType> data(samples[0].data(), N * samples.size());
+  return Write(file_writer, format_spec, data);
+}
+
+template <class FileWriter>
+template <class FileWriterType, class ContainerType, class ValueType>
+  requires std::constructible_from<std::span<ValueType>, const ContainerType&>
+auto Writer<FileWriter>::Write(FileWriterType&& file_writer,
+                               const FormatSpec& format_spec,
+                               const ContainerType& container) -> bool {
+  return Write(file_writer, format_spec, std::span(container));
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Private implementation.
 
 namespace internal {
-
-template <class T>
-inline auto Byteswap(T value) -> T;
-
-// Swap endianess of 16 bit unsigned int value.
-template <>
-[[nodiscard]] inline auto Byteswap(const uint16_t value) -> uint16_t {
-#if defined(__GNUC__)
-  return __builtin_bswap16(value);
-#elif defined(_MSC_VER)
-  static_assert(sizeof(unsigned short) == 2, "Size of short should be 2");
-  return _byteswap_ushort(value);
-#else
-  return (value >> 8) | (value << 8);
-#endif
-}
-
-// Swap endianess of 32 bit unsigned int value.
-template <>
-[[nodiscard]] inline auto Byteswap(const uint32_t value) -> uint32_t {
-#if defined(__GNUC__)
-  return __builtin_bswap32(value);
-#elif defined(_MSC_VER)
-  static_assert(sizeof(unsigned long) == 4, "Size of long should be 4");
-  return _byteswap_ulong(value);
-#else
-  return ((value >> 24)) | ((value << 8) & 0x00ff0000) |
-         ((value >> 8) & 0x0000ff00) | ((value << 24));
-#endif
-}
-
-template <class T>
-[[nodiscard]] inline auto Byteswap(const T value) -> T {
-  static_assert(sizeof(T) == 1 || sizeof(T) == 2 || sizeof(T) == 4);
-
-  if constexpr (sizeof(T) == 1) {
-    return value;
-  }
-
-  if constexpr (sizeof(T) == 2) {
-    uint16_t result = Byteswap(*reinterpret_cast<const uint16_t*>(&value));
-    return *reinterpret_cast<T*>(&result);
-  }
-
-  if constexpr (sizeof(T) == 4) {
-    uint32_t result = Byteswap(*reinterpret_cast<const uint32_t*>(&value));
-    return *reinterpret_cast<T*>(&result);
-  }
-
-  assert(!"Unhandled type for Byteswap");
-
-  return {};
-}
-
-// Calculate size which is to be specified in the RIFF/RIFX chunk header.
-// This size is the size of the entire WAV file minus the header of the
-// RIFF/RIFX chunk header.
-[[nodiscard]] inline auto CalculateRIFFContainerSize(
-    const uint32_t num_data_bytes) -> uint32_t {
-  return
-      // Data of the RIFF/RIFX chunk.
-      sizeof(RIFFData) +
-      // Header and data of the FMT chunk.
-      sizeof(ChunkHeader) + sizeof(FormatData) +
-      // Header and data of the DATA chunk (samples).
-      sizeof(ChunkHeader) + num_data_bytes;
-}
 
 [[nodiscard]] inline auto FormatSpecToFormatData(const FormatSpec& format_spec)
     -> FormatData {
@@ -683,53 +781,87 @@ template <class FileWriter, class T>
   return file_writer.Write(object_ptr, kObjectSize) == kObjectSize;
 }
 
+inline auto GetRIFFChunkID(const FormatSpec& format_spec) -> ChunkID {
+  switch (format_spec.file_format) {
+    case FileFormat::kRIFF:
+      return (std::endian::native == std::endian::little) ? ChunkID::kRIFF
+                                                          : ChunkID::kRIFX;
+    case FileFormat::kRF64: return ChunkID::kRF64;
+  }
+  assert(!"Unreachable code executed");
+  return ChunkID::kRIFF;
+}
+
 // Write WAVE header to the file, starting at the current position in the file.
 //
 // Writes all sections of header up to and including the DATA chunk header.
 template <class FileWriter>
 [[nodiscard]] inline auto WriteHeader(FileWriter& file_writer,
                                       const FormatSpec& format_spec,
-                                      const uint32_t num_samples) -> bool {
-  const uint32_t byte_depth = format_spec.bit_depth / 8;
-  const uint32_t num_data_bytes =
+                                      const uint64_t num_samples) -> bool {
+  const uint64_t byte_depth = format_spec.bit_depth / 8;
+  const uint64_t num_data_bytes =
       num_samples * byte_depth * format_spec.num_channels;
 
   // RIFF header and data.
-
-  constexpr ChunkID riff_id = (std::endian::native == std::endian::little)
-                                  ? ChunkID::kRIFF
-                                  : ChunkID::kRIFX;
-
-  const uint32_t riff_container_size =
-      CalculateRIFFContainerSize(num_data_bytes);
-
+  // Note that for the RF64 file format it is the DS64 block which holds the
+  // size. In this format the RIFF header specifies size of 0xffffffff.
+  const ChunkID riff_id = GetRIFFChunkID(format_spec);
+  const uint64_t riff_container_size =
+      CalculateRIFFContainerSize(format_spec.file_format, num_data_bytes);
+  const uint32_t riff_container_size_in_header =
+      format_spec.file_format == FileFormat::kRF64
+          ? 0xffffffff
+          : uint32_t(riff_container_size);
   if (!WriteObjectToFile(
           file_writer,
-          ChunkHeader{.id = riff_id, .size = riff_container_size})) {
+          ChunkHeader{.id = riff_id, .size = riff_container_size_in_header})) {
     return false;
   }
-
   if (!WriteObjectToFile(file_writer, RIFFData{.format = Format::kWAVE})) {
     return false;
   }
 
-  // Format.
+  // DS64 chunk for RF64 file format.
+  if (riff_id == ChunkID::kRF64) {
+    if (!WriteObjectToFile(
+            file_writer,
+            ChunkHeader{.id = ChunkID::kDS64, .size = sizeof(DS64)})) {
+      return false;
+    }
 
+    if (!WriteObjectToFile(
+            file_writer,
+            DS64{
+                .riff_size_low = uint32_t(riff_container_size & 0xffffffff),
+                .riff_size_high =
+                    uint32_t((riff_container_size >> 32) & 0xffffffff),
+                .data_size_low = uint32_t(num_data_bytes & 0xffffffff),
+                .data_size_high = uint32_t((num_data_bytes >> 32) & 0xffffffff),
+                .sample_count_low = uint32_t(num_samples & 0xffffffff),
+                .sample_count_high = uint32_t((num_samples >> 32) & 0xffffffff),
+                .table_length = 0,
+            })) {
+      return false;
+    }
+  }
+
+  // Format.
   if (!WriteObjectToFile(
           file_writer,
           ChunkHeader{.id = ChunkID::kFMT, .size = sizeof(FormatData)})) {
     return false;
   }
-
   if (!WriteObjectToFile(file_writer, FormatSpecToFormatData(format_spec))) {
     return false;
   }
 
   // Data header.
-
+  const uint32_t data_size = format_spec.file_format == FileFormat::kRF64
+                                 ? 0xffffffff
+                                 : uint32_t(num_data_bytes);
   if (!WriteObjectToFile(
-          file_writer,
-          ChunkHeader{.id = ChunkID::kDATA, .size = num_data_bytes})) {
+          file_writer, ChunkHeader{.id = ChunkID::kDATA, .size = data_size})) {
     return false;
   }
 

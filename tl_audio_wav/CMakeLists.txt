@@ -18,6 +18,7 @@ add_library(tl_audio_wav INTERFACE ${PUBLIC_HEADERS})
 function(tl_audio_wav_test PRIMITIVE_NAME)
   tl_test(audio_wav_${PRIMITIVE_NAME}
           test/tl_audio_wav_${PRIMITIVE_NAME}_test.cc
+          test/tl_audio_wav_test_data.h
           LIBRARIES tl_audio_wav)
 endfunction()
 

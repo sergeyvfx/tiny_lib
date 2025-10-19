@@ -13,75 +13,17 @@
 
 #include "tiny_lib/unittest/mock.h"
 #include "tiny_lib/unittest/test.h"
+#include "tl_audio_wav/test/tl_audio_wav_test_data.h"
 #include "tl_io/tl_io_file.h"
-
-#ifdef _MSC_VER
-#  include <BaseTsd.h>
-using ssize_t = SSIZE_T;
-#endif
 
 namespace tiny_lib::audio_wav_writer {
 
 using testing::Eq;
 using testing::Pointwise;
 
+using namespace audio_wav_test_data;
+
 namespace {
-
-template <std::endian>
-struct SimpleWAV;
-
-// Data of a simple WAV file.
-// Stereo channel, 3 samples, 44100 samples per second.
-template <>
-struct SimpleWAV<std::endian::little> {
-  // Floating point samples provided to the writer.
-  static constexpr auto kSamplesFloat = std::to_array({
-      std::array<float, 2>{0.1f, 0.4f},
-      std::array<float, 2>{0.2f, 0.5f},
-      std::array<float, 2>{0.3f, 0.6f},
-  });
-  static constexpr std::span<const float> kSamplesFloatFlat{
-      kSamplesFloat[0].data(), sizeof(kSamplesFloat) / sizeof(float)};
-
-  // Integral int16_t samples provided to the writer.
-  static constexpr auto kSamplesInt16 = std::to_array({
-      std::array<int16_t, 2>{3276, 13106},
-      std::array<int16_t, 2>{6553, 16383},
-      std::array<int16_t, 2>{9830, 19660},
-  });
-  static constexpr std::span<const int16_t> kSamplesInt16Flat{
-      kSamplesInt16[0].data(), sizeof(kSamplesInt16) / sizeof(int16_t)};
-
-  // Expected data tp be saved.
-  static constexpr auto kData = std::to_array<uint8_t>({
-      // clang-format off
-
-      // RIFF chunk.
-      'R', 'I' , 'F' , 'F',       // The RIFF chunk ID.
-      0x30, 0x00, 0x00, 0x00,     // Chunk size.
-      'W' , 'A' , 'V' , 'E',      // Format.
-
-      // FMT chunk.
-      'f', 'm' , 't' , ' ',       // The FMT chunk ID.
-      0x10, 0x00, 0x00, 0x00,     // Chunk size (16 for PCM).
-      0x01, 0x00,                 // Audio format (1 for PCM),
-      0x02, 0x00,                 // Number of channels.
-      0x44, 0xac, 0x00, 0x00,     // Sample rate (hex(44100) -> 0xac44).
-      0x10, 0xb1, 0x02, 0x00,     // Byte rate (hex(44100 * 2 * 2) -> 0x2b110)
-      0x04, 0x00,                 // Block align.
-      0x10, 0x00,                 // Bits per sample.
-
-      // DATA chunk.
-      'd' , 'a' , 't' , 'a' ,     // The DATA chunk ID.
-      0x0c, 0x00, 0x00, 0x00,     // Chunk size (12 = 2 * 3 * 16bit samples).
-
-      // Samples.
-      0xcc, 0x0c,  0x32, 0x33,    // Sample 1: (0.1, 0.4).
-      0x99, 0x19,  0xff, 0x3f,    // Sample 2: (0.2, 0.5).
-      0x66, 0x26,  0xcc, 0x4c,    // Sample 3: (0.3, 0.6).
-      // clang-format on
-  });
-};
 
 // Minimalistic implementation of a file writer interface which writes data to
 // an in-memory container.
@@ -146,22 +88,30 @@ class SimpleFileWriterToMemory : public FileWriterToMemory {
 }  // namespace
 
 TEST(tl_audio_wav_writer, MaxNumSamples) {
+  // RIFF.
   {
     EXPECT_EQ(Writer<SimpleFileWriterToMemory>::MaxNumSamples(FormatSpec{
-                  .num_channels = 2, .sample_rate = 44100, .bit_depth = 16}),
+                  .file_format = FileFormat::kRIFF,
+                  .num_channels = 2,
+                  .sample_rate = 44100,
+                  .bit_depth = 16,
+              }),
               0x3ffffff6);
+  }
+  // RF64.
+  {
+    EXPECT_EQ(Writer<SimpleFileWriterToMemory>::MaxNumSamples(FormatSpec{
+                  .file_format = FileFormat::kRF64,
+                  .num_channels = 2,
+                  .sample_rate = 44100,
+                  .bit_depth = 16,
+              }),
+              0x3fffffffffffffed);
   }
 }
 
-TEST(tl_audio_wav_writer, WriteSingleSample) {
-  using SimpleWAV = SimpleWAV<std::endian::native>;
-
-  const FormatSpec format_spec = {
-      .num_channels = 2,
-      .sample_rate = 44100,
-      .bit_depth = 16,
-  };
-
+static void TestCommonWriteSingleSample(const FormatSpec& format_spec,
+                                        const TestData& test_data) {
   // float source samples.
   {
     SimpleFileWriterToMemory file_writer;
@@ -169,13 +119,13 @@ TEST(tl_audio_wav_writer, WriteSingleSample) {
 
     EXPECT_TRUE(wav_writer.Open(file_writer, format_spec));
 
-    for (const auto& sample : SimpleWAV::kSamplesFloat) {
+    for (const auto& sample : test_data.GetSamplesFloat()) {
       EXPECT_TRUE(wav_writer.WriteSingleSample<float>(sample));
     }
 
     EXPECT_TRUE(wav_writer.Close());
 
-    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), SimpleWAV::kData));
+    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), test_data.GetData()));
   }
 
   // int16_t source samples.
@@ -185,34 +135,55 @@ TEST(tl_audio_wav_writer, WriteSingleSample) {
 
     EXPECT_TRUE(wav_writer.Open(file_writer, format_spec));
 
-    for (const auto& sample : SimpleWAV::kSamplesInt16) {
+    for (const auto& sample : test_data.GetSamplesInt16()) {
       EXPECT_TRUE(wav_writer.WriteSingleSample<int16_t>(sample));
     }
 
     EXPECT_TRUE(wav_writer.Close());
 
-    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), SimpleWAV::kData));
+    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), test_data.GetData()));
   }
 }
 
-TEST(tl_audio_wav_writer, WriteMultipleSamples) {
-  using SimpleWAV = SimpleWAV<std::endian::native>;
+TEST(tl_audio_wav_writer, WriteSingleSample_RIFFWAV_PCM16) {
+  ASSERT_TRUE(std::endian::native == std::endian::little)
+      << "Code is only tested on little endian machines";
 
-  const FormatSpec format_spec = {
+  constexpr FormatSpec kFormatSpec = {
+      .file_format = FileFormat::kRIFF,
       .num_channels = 2,
       .sample_rate = 44100,
       .bit_depth = 16,
   };
 
+  TestCommonWriteSingleSample(kFormatSpec, RIFFWAV_PCM16());
+}
+
+TEST(tl_audio_wav_writer, WriteSingleSample_RF64WAV_PCM16) {
+  ASSERT_TRUE(std::endian::native == std::endian::little)
+      << "Code is only tested on little endian machines";
+
+  constexpr FormatSpec kFormatSpec = {
+      .file_format = FileFormat::kRF64,
+      .num_channels = 2,
+      .sample_rate = 44100,
+      .bit_depth = 16,
+  };
+
+  TestCommonWriteSingleSample(kFormatSpec, RF64WAV_PCM16());
+}
+
+static void TestCommonWriteMultipleSamples(const FormatSpec& format_spec,
+                                           const TestData& test_data) {
   // float source samples.
   {
     SimpleFileWriterToMemory file_writer;
     Writer<SimpleFileWriterToMemory> wav_writer;
 
     EXPECT_TRUE(wav_writer.Open(file_writer, format_spec));
-    EXPECT_TRUE(wav_writer.WriteMultipleSamples(SimpleWAV::kSamplesFloatFlat));
+    EXPECT_TRUE(wav_writer.WriteMultipleSamples(test_data.GetSamplesFloat()));
     EXPECT_TRUE(wav_writer.Close());
-    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), SimpleWAV::kData));
+    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), test_data.GetData()));
   }
 
   // int16_t source samples.
@@ -221,29 +192,50 @@ TEST(tl_audio_wav_writer, WriteMultipleSamples) {
     Writer<SimpleFileWriterToMemory> wav_writer;
 
     EXPECT_TRUE(wav_writer.Open(file_writer, format_spec));
-    EXPECT_TRUE(wav_writer.WriteMultipleSamples(SimpleWAV::kSamplesInt16Flat));
+    EXPECT_TRUE(wav_writer.WriteMultipleSamples(test_data.GetSamplesInt16()));
     EXPECT_TRUE(wav_writer.Close());
-    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), SimpleWAV::kData));
+    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), test_data.GetData()));
   }
 }
 
-TEST(tl_audio_wav_writer, SimplePipeline) {
-  using SimpleWAV = SimpleWAV<std::endian::native>;
+TEST(tl_audio_wav_writer, WriteMultipleSamples_RIFFWAV_PCM16) {
+  ASSERT_TRUE(std::endian::native == std::endian::little)
+      << "Code is only tested on little endian machines";
 
-  const FormatSpec format_spec = {
+  constexpr FormatSpec kFormatSpec = {
+      .file_format = FileFormat::kRIFF,
       .num_channels = 2,
       .sample_rate = 44100,
       .bit_depth = 16,
   };
 
+  TestCommonWriteMultipleSamples(kFormatSpec, RIFFWAV_PCM16());
+}
+
+TEST(tl_audio_wav_writer, WriteMultipleSamples_RF64WAV_PCM16) {
+  ASSERT_TRUE(std::endian::native == std::endian::little)
+      << "Code is only tested on little endian machines";
+
+  constexpr FormatSpec kFormatSpec = {
+      .file_format = FileFormat::kRF64,
+      .num_channels = 2,
+      .sample_rate = 44100,
+      .bit_depth = 16,
+  };
+
+  TestCommonWriteMultipleSamples(kFormatSpec, RF64WAV_PCM16());
+}
+
+static void TestCommonSimplePipeline(const FormatSpec& format_spec,
+                                     const TestData& test_data) {
   // float source samples.
   {
     SimpleFileWriterToMemory file_writer;
 
     EXPECT_TRUE(Writer<SimpleFileWriterToMemory>::Write(
-        file_writer, format_spec, SimpleWAV::kSamplesFloatFlat));
+        file_writer, format_spec, test_data.GetSamplesFloat()));
 
-    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), SimpleWAV::kData));
+    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), test_data.GetData()));
   }
 
   // int16_t source samples.
@@ -251,10 +243,38 @@ TEST(tl_audio_wav_writer, SimplePipeline) {
     SimpleFileWriterToMemory file_writer;
 
     EXPECT_TRUE(Writer<SimpleFileWriterToMemory>::Write(
-        file_writer, format_spec, SimpleWAV::kSamplesInt16Flat));
+        file_writer, format_spec, test_data.GetSamplesInt16()));
 
-    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), SimpleWAV::kData));
+    EXPECT_THAT(file_writer.buffer, Pointwise(Eq(), test_data.GetData()));
   }
+}
+
+TEST(tl_audio_wav_writer, SimplePipeline_RIFFWAV_PCM16) {
+  ASSERT_TRUE(std::endian::native == std::endian::little)
+      << "Code is only tested on little endian machines";
+
+  constexpr FormatSpec kFormatSpec = {
+      .file_format = FileFormat::kRIFF,
+      .num_channels = 2,
+      .sample_rate = 44100,
+      .bit_depth = 16,
+  };
+
+  TestCommonSimplePipeline(kFormatSpec, RIFFWAV_PCM16());
+}
+
+TEST(tl_audio_wav_writer, SimplePipeline_RF64WAV_PCM16) {
+  ASSERT_TRUE(std::endian::native == std::endian::little)
+      << "Code is only tested on little endian machines";
+
+  constexpr FormatSpec kFormatSpec = {
+      .file_format = FileFormat::kRF64,
+      .num_channels = 2,
+      .sample_rate = 44100,
+      .bit_depth = 16,
+  };
+
+  TestCommonSimplePipeline(kFormatSpec, RF64WAV_PCM16());
 }
 
 // Ensure that tiny_lib::io_file::File implements needed APIs.
@@ -263,12 +283,13 @@ TEST(tl_audio_wav_writer, File) {
   Writer<io_file::File> wav_writer;
 
   if (false) {  // NOLINT(readability-simplify-boolean-expr)
-    const FormatSpec format_spec = {
+    constexpr FormatSpec kFormatSpec = {
+        .file_format = FileFormat::kRIFF,
         .num_channels = 2,
         .sample_rate = 44100,
         .bit_depth = 16,
     };
-    wav_writer.Open(file, format_spec);
+    wav_writer.Open(file, kFormatSpec);
     wav_writer.Close();
   }
 }
