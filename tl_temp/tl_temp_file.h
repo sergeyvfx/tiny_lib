@@ -27,6 +27,8 @@
 // Version history
 // ===============
 //
+//   0.0.2-alpha    (22 Nov 2025)    Fixed missing null-terminator in file path
+//                                   on Linux/POSIX systems.
 //   0.0.1-alpha    (28 Dec 2023)    First public release.
 
 #pragma once
@@ -273,7 +275,7 @@ inline auto GetFileStreamPath(FILE* stream) -> std::filesystem::path {
     return {};
   }
 
-  return {path};
+  return {std::string_view(path, num_bytes)};
 }
 #endif
 
